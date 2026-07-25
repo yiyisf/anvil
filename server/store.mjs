@@ -8,6 +8,7 @@ import path from "node:path";
 
 const DATA = process.env.DATA_DIR || path.join(process.cwd(), ".data");
 const reqFile = (id) => path.join(DATA, "reqs", `${id}.json`);
+const projectFile = (id) => path.join(DATA, "projects", `${id}.json`);
 const sessFile = (key) => path.join(DATA, "sessions", `${key.replace(/[\\/:]/g, "-")}.json`);
 
 async function readJson(p, fallback = null) {
@@ -42,16 +43,51 @@ export async function saveReq(req) {
   return req;
 }
 
-export function newReq(title) {
+export function newReq(title, projectId) {
   const id = `REQ-${Date.now().toString(36).slice(-5).toUpperCase()}`;
   return {
     id,
+    projectId,
     title,
     phase: "analysis", // analysis | impl | done
     dialog: [],        // 分析阶段对话
     settled: { fixed: [], open: [] },
     implChat: [],      // 实现阶段对话
     tickets: [],       // [{ticket,title,skills:[{name,state,tools,files,note,detail}]}]
+    everReset: false,      // 是否经历过重跑（用于一次通过率判定）
+    failureReason: null,   // 'unclear_requirement' | 'implementation' | 'environment' | null
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/* ── 项目（多仓库）───────────────────── */
+export async function listProjects() {
+  try {
+    const files = await readdir(path.join(DATA, "projects"));
+    const all = await Promise.all(
+      files.filter((f) => f.endsWith(".json")).map((f) => readJson(path.join(DATA, "projects", f)))
+    );
+    return all.filter(Boolean).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  } catch {
+    return [];
+  }
+}
+
+export const getProject = (id) => readJson(projectFile(id));
+
+export async function saveProject(project) {
+  await writeJson(projectFile(project.id), project);
+  return project;
+}
+
+export function newProject({ name, repoPath, worktreesDir, baseBranch }) {
+  const id = `PRJ-${Date.now().toString(36).slice(-5).toUpperCase()}`;
+  return {
+    id,
+    name,
+    repoPath,
+    worktreesDir,
+    baseBranch: baseBranch || "",
     createdAt: new Date().toISOString(),
   };
 }

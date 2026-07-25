@@ -24,7 +24,6 @@ const {
   LITELLM_API_KEY = "sk-noauth",
   PI_MODEL,
   PI_PROVIDER = "anthropic", // anthropic(/v1/messages) | openai(/v1/responses)
-  WORKTREES_DIR,
 } = process.env;
 
 const shq = (s) => "'" + String(s).replace(/'/g, `'\\''`) + "'";
@@ -69,14 +68,14 @@ function buildHarness() {
  * 目的是在交给 provider 之前把真实工具（node/npm/git…）注册进去。
  * provider 支持 createJustBashSandbox({ sandbox }) 直接接收实例。
  */
-async function buildAgent({ reqId, instructions, skills, restore, phase = "impl" }) {
+async function buildAgent({ reqId, worktreesDir, instructions, skills, restore, phase = "impl" }) {
   const raw = await Sandbox.create({
-    fs: new ReadWriteFs({ root: WORKTREES_DIR }),
+    fs: new ReadWriteFs({ root: worktreesDir }),
     cwd: "/",
     useDefaultLayout: false,
   });
   // 从该需求的 worktree 读 agent.config.json（随仓库带入），实现按项目白名单
-  const toolCfg = registerTools(raw, WORKTREES_DIR, path.join(WORKTREES_DIR, reqId));
+  const toolCfg = registerTools(raw, worktreesDir, path.join(worktreesDir, reqId));
   // 常驻日志：桥接结果一眼可见，避免"配了却没生效"这类问题排查困难
   console.log(
     `[tools] ${reqId}/${phase} sandbox=[${toolCfg.tools.join(",")}] 来源=${toolCfg.source}`
@@ -85,7 +84,7 @@ async function buildAgent({ reqId, instructions, skills, restore, phase = "impl"
   const sandbox = wrapResumable(createJustBashSandbox({ sandbox: raw }));
 
   // Agent 工具层：按阶段限定 LLM 能调用哪些工具（与 sandbox 环境依赖是两层）
-  const toolSettings = agentToolSettings(phase, path.join(WORKTREES_DIR, reqId));
+  const toolSettings = agentToolSettings(phase, path.join(worktreesDir, reqId));
   console.log(
     `[tools] ${reqId}/${phase} agent=[${toolSettings.builtinToolFiltering?.toolNames?.join(",") || "全部内建工具"}]`
   );
@@ -143,14 +142,14 @@ async function grabJsonl(sessionId) {
  * 跑一轮（无状态：每次全新 sandbox，靠 jsonl 续接记忆）
  * @returns {{ text:string, tools:Array, files:Array }}
  */
-export async function runTurn({ reqId, sessionKey, prompt, instructions, skills = [], onEvent, phase = "impl" }) {
+export async function runTurn({ reqId, worktreesDir, sessionKey, prompt, instructions, skills = [], onEvent, phase = "impl" }) {
   if (!LITELLM_BASE_URL) throw new Error("未配置 LITELLM_BASE_URL");
-  if (!WORKTREES_DIR) throw new Error("未配置 WORKTREES_DIR");
+  if (!worktreesDir) throw new Error("未配置 worktreesDir");
 
   const sessionId = `${reqId}--${sessionKey}`; // 分析与实现各自独立会话
   const saved = await loadSession(sessionId);
 
-  const agent = await buildAgent({ reqId, instructions, skills, restore: saved, phase });
+  const agent = await buildAgent({ reqId, worktreesDir, instructions, skills, restore: saved, phase });
   const session = await agent.createSession({
     sessionId,
     ...(saved?.resumeState ? { resumeFrom: saved.resumeState } : {}),

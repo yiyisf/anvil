@@ -8,7 +8,7 @@
  *   - 工单 fail / blocked 时，下游依赖它的工单标成 waiting_dep，不再推进
  */
 import { runTurn as defaultRunTurn } from "./harness.mjs";
-import { getReq, saveReq } from "./store.mjs";
+import { getReq, saveReq, getProject } from "./store.mjs";
 import { readArtifact, commitAll } from "./worktree.mjs";
 import { IMPL_INSTRUCTIONS, SKILLS } from "./skills.mjs";
 
@@ -126,8 +126,8 @@ function broadcast(reqId, e) {
 }
 
 /** 跑一个 skill（含失败重试一次） */
-async function runSkill({ req, ticket, step, extractVerdict, runTurn }) {
-  const spec = (await readArtifact(req.id, "spec.feature")) || "";
+async function runSkill({ req, project, ticket, step, extractVerdict, runTurn }) {
+  const spec = (await readArtifact(project, req.id, "spec.feature")) || "";
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     step.state = "running";
@@ -144,6 +144,7 @@ async function runSkill({ req, ticket, step, extractVerdict, runTurn }) {
 
     const out = await runTurn({
       reqId: req.id,
+      worktreesDir: project.worktreesDir,
       // 每个工单独立会话：共用一个会话会让上下文随工单数线性累积，
       // 触发压缩后实施质量不可控。一个工单只承载自己那三步。
       sessionKey: `impl-${ticket.ticket}`,
@@ -165,7 +166,7 @@ ${spec}
     step.note = v.summary;
     step.verdictSource = v.structured ? "verdict" : "fallback";
 
-    await commitAll(req.id, `${ticket.ticket} ${step.name}${attempt > 1 ? " (重试)" : ""}`);
+    await commitAll(project, req.id, `${ticket.ticket} ${step.name}${attempt > 1 ? " (重试)" : ""}`);
 
     if (v.state === "pass") {
       step.state = "pass";
@@ -211,6 +212,8 @@ export function startRun(reqId, extractVerdict, { runTurn = defaultRunTurn } = {
       for (;;) {
         const req = await getReq(reqId);
         if (!req) break;
+        const project = await getProject(req.projectId);
+        if (!project) throw new Error(`需求 ${reqId} 找不到所属项目 ${req.projectId}`);
         if (running.get(reqId)?.stop) {
           broadcast(reqId, { type: "run", state: "stopped" });
           break;
@@ -234,7 +237,7 @@ export function startRun(reqId, extractVerdict, { runTurn = defaultRunTurn } = {
         for (const step of t.skills) {
           if (step.state === "pass") continue;
           if (running.get(reqId)?.stop) { halted = true; break; }
-          const r = await runSkill({ req, ticket: t, step, extractVerdict, runTurn });
+          const r = await runSkill({ req, project, ticket: t, step, extractVerdict, runTurn });
           if (r !== "pass") { halted = true; break; }
         }
 
