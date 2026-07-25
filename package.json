@@ -1,0 +1,28 @@
+{
+  "name": "v4-console",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n api,ui -c blue,green \"node --env-file=.env server/index.mjs\" \"vite\"",
+    "api": "node --env-file=.env server/index.mjs",
+    "ui": "vite"
+  },
+  "dependencies": {
+    "@ai-sdk/harness": "1.0.39",
+    "@ai-sdk/harness-pi": "1.0.39",
+    "@ai-sdk/sandbox-just-bash": "1.0.39",
+    "just-bash": "^2.14.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "lucide-react": "^0.383.0",
+    "cross-spawn": "^7.0.6"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.0",
+    "tailwindcss": "^3.4.10",
+    "postcss": "^8.4.41",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.0.1"
+  }
+}
