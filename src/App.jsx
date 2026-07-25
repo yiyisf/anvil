@@ -2,12 +2,13 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   ChevronRight, ChevronDown, Check, Terminal, FileText, CornerDownLeft,
   Loader2, AlertCircle, ArrowRight, RotateCcw, Pencil, MessageSquare, Plus, Play,
+  FolderGit2, ChevronsUpDown,
 } from "lucide-react";
 
 const api = {
   list: () => fetch("/api/reqs").then((r) => r.json()),
   get: (id) => fetch(`/api/req?id=${id}`).then((r) => r.json()),
-  create: (title) => post("/api/reqs", { title }),
+  create: (title, projectId) => post("/api/reqs", { title, projectId }),
   message: (id, text, onEvent) => streamPost(`/api/message?id=${id}`, { text }, onEvent),
   implMessage: (id, text) => post(`/api/impl-message?id=${id}`, { text }),
   handoff: (id) => post(`/api/handoff?id=${id}`, {}),
@@ -16,6 +17,13 @@ const api = {
   invalidate: (id, backToAnalysis) => post(`/api/invalidate?id=${id}`, { backToAnalysis }),
   start: (id) => post(`/api/start?id=${id}`, {}),
   stop: (id) => post(`/api/stop?id=${id}`, {}),
+  stepReset: (id, ticket, skillName) => post(`/api/step-reset?id=${id}`, { ticket, skillName }),
+  ticketReset: (id, ticket) => post(`/api/ticket-reset?id=${id}`, { ticket }),
+  failureReason: (id, reason) => post(`/api/reqs/${id}/failure-reason`, { reason }),
+  projects: {
+    list: () => fetch("/api/projects").then((r) => r.json()),
+    create: (p) => post("/api/projects", p),
+  },
 };
 /** 消费 NDJSON 流：逐行回调事件，返回最终 req */
 async function streamPost(url, body, onEvent) {
@@ -86,8 +94,29 @@ function subscribeRun(id, onEvent, onEnd) {
   return () => ctrl.abort();
 }
 
+/** 一次通过：全部完成、没重跑过、每步第一次尝试就 pass */
+function isOnePass(r) {
+  if (r.phase !== "done" || r.everReset) return false;
+  const skills = (r.tickets || []).flatMap((t) => t.skills);
+  return skills.length > 0 && skills.every((s) => s.state === "pass" && (s.attempt || 1) === 1);
+}
+
+/** 本周（周一至今）需求的一次通过统计 */
+function weeklyPassStats(reqs) {
+  const now = new Date();
+  const day = now.getDay();
+  const monday = new Date(now);
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
+  const weekReqs = reqs.filter((r) => new Date(r.createdAt) >= monday);
+  return { total: weekReqs.length, onePass: weekReqs.filter(isOnePass).length };
+}
+
 export default function App() {
   const [reqs, setReqs] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [activeProjectId, setActiveProjectId] = useState(null);
+  const [showAllProjects, setShowAllProjects] = useState(false);
   const [activeId, setActiveId] = useState(null);
   const [req, setReq] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -109,6 +138,13 @@ export default function App() {
 
   const refreshList = useCallback(async () => setReqs(await api.list()), []);
   useEffect(() => { refreshList(); }, [refreshList]);
+  useEffect(() => {
+    api.projects.list().then((ps) => {
+      setProjects(ps);
+      if (ps.length && !activeProjectId) setActiveProjectId(ps[0].id);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => {
     if (!activeId) return setReq(null);
     api.get(activeId).then(setReq);
@@ -150,12 +186,28 @@ export default function App() {
     setBusy(false); setLive(null);
   }
 
+  const visibleReqs = showAllProjects
+    ? reqs
+    : reqs.filter((r) => !activeProjectId || r.projectId === activeProjectId);
+
   return (
     <div className="flex h-screen w-full bg-white text-sm text-neutral-900 antialiased">
       <Sidebar
-        reqs={reqs} activeId={activeId} onPick={setActiveId}
+        reqs={visibleReqs} allReqs={reqs} activeId={activeId} onPick={setActiveId}
+        projects={projects} activeProjectId={activeProjectId} onProjectChange={setActiveProjectId}
+        showAllProjects={showAllProjects} onToggleShowAll={() => setShowAllProjects((v) => !v)}
+        onCreateProject={async (p) => {
+          const created = await api.projects.create(p);
+          if (!created?.error) {
+            const ps = await api.projects.list();
+            setProjects(ps);
+            setActiveProjectId(created.id);
+          }
+          return created;
+        }}
         onCreate={async (title) => {
-          const r = await api.create(title);
+          if (!activeProjectId) return;
+          const r = await api.create(title, activeProjectId);
           await refreshList(); setActiveId(r.id);
         }}
       />
@@ -185,6 +237,9 @@ export default function App() {
                 onRun={(ticket) => act(() => api.run(req.id, ticket, onEvent))}
                 onSend={(t) => act(() => api.implMessage(req.id, t))}
                 onInvalidate={(back) => act(() => api.invalidate(req.id, back))}
+                onStepReset={(ticket, skillName) => act(() => api.stepReset(req.id, ticket, skillName))}
+                onTicketReset={(ticket) => act(() => api.ticketReset(req.id, ticket))}
+                onFailureReason={(reason) => act(() => api.failureReason(req.id, reason))}
               />
             )}
           </>
@@ -195,17 +250,74 @@ export default function App() {
 }
 
 /* ── 左栏 ─────────────────────────────────────── */
-function Sidebar({ reqs, activeId, onPick, onCreate }) {
+function Sidebar({
+  reqs, allReqs, activeId, onPick,
+  projects, activeProjectId, onProjectChange, showAllProjects, onToggleShowAll, onCreateProject,
+  onCreate,
+}) {
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const activeProject = projects.find((p) => p.id === activeProjectId);
+  const stats = weeklyPassStats(showAllProjects ? allReqs : reqs);
+
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-neutral-200">
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-neutral-200 px-4">
-        <span className="font-medium">研发流程</span>
-        <button onClick={() => setAdding(true)} className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900">
+      <div className="relative flex h-12 shrink-0 items-center justify-between border-b border-neutral-200 px-4">
+        <button
+          onClick={() => setPickerOpen((v) => !v)}
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-1 text-left hover:bg-neutral-50"
+        >
+          <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
+          <span className="truncate font-medium">{activeProject?.name || "选择项目"}</span>
+          <ChevronsUpDown className="h-3 w-3 shrink-0 text-neutral-400" />
+        </button>
+        <button onClick={() => setAdding(true)} className="shrink-0 rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900" title="新建需求">
           <Plus className="h-4 w-4" />
         </button>
+
+        {pickerOpen && (
+          <div className="absolute left-0 top-12 z-10 w-72 rounded-md border border-neutral-200 bg-white p-1.5 shadow-lg">
+            {projects.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => { onProjectChange(p.id); setPickerOpen(false); }}
+                className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs ${
+                  p.id === activeProjectId ? "bg-neutral-100" : "hover:bg-neutral-50"
+                }`}
+              >
+                <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                {p.id === activeProjectId && <Check className="h-3 w-3 shrink-0 text-emerald-600" />}
+              </button>
+            ))}
+            {projects.length === 0 && <p className="px-2 py-1.5 text-xs text-neutral-500">还没有项目</p>}
+            <div className="my-1 border-t border-neutral-200" />
+            <label className="flex items-center gap-2 px-2 py-1.5 text-xs text-neutral-600">
+              <input type="checkbox" checked={showAllProjects} onChange={onToggleShowAll} />
+              显示全部项目的需求
+            </label>
+            <button
+              onClick={() => { setCreatingProject(true); setPickerOpen(false); }}
+              className="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-xs text-neutral-600 hover:bg-neutral-50"
+            >
+              <Plus className="h-3 w-3" /> 新建项目
+            </button>
+          </div>
+        )}
       </div>
+
+      <div className="shrink-0 border-b border-neutral-200 px-4 py-2 text-xs text-neutral-500">
+        本周 {stats.total} 个需求，{stats.onePass} 个一次通过
+      </div>
+
+      {creatingProject && (
+        <NewProjectForm onCancel={() => setCreatingProject(false)} onCreate={async (p) => {
+          const created = await onCreateProject(p);
+          if (!created?.error) setCreatingProject(false);
+          return created;
+        }} />
+      )}
 
       {adding && (
         <div className="shrink-0 border-b border-neutral-200 p-3">
@@ -233,12 +345,54 @@ function Sidebar({ reqs, activeId, onPick, onCreate }) {
               }`}
             >
               <span className="flex-1 truncate">{r.title}</span>
+              {showAllProjects && r.projectId !== activeProjectId && (
+                <span className="shrink-0 truncate text-xs text-neutral-400">
+                  {projects.find((p) => p.id === r.projectId)?.name || ""}
+                </span>
+              )}
               <PhaseTag phase={r.phase} />
             </button>
           ))}
         </div>
       </div>
     </aside>
+  );
+}
+
+function NewProjectForm({ onCreate, onCancel }) {
+  const [name, setName] = useState("");
+  const [repoPath, setRepoPath] = useState("");
+  const [worktreesDir, setWorktreesDir] = useState("");
+  const [baseBranch, setBaseBranch] = useState("");
+  const [error, setError] = useState(null);
+
+  async function submit() {
+    setError(null);
+    const created = await onCreate({ name: name.trim(), repoPath: repoPath.trim(), worktreesDir: worktreesDir.trim(), baseBranch: baseBranch.trim() });
+    if (created?.error) setError(created.error);
+  }
+
+  return (
+    <div className="shrink-0 space-y-1.5 border-b border-neutral-200 p-3">
+      <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="项目名称"
+        className="w-full rounded-md border border-neutral-300 px-2.5 py-1.5 text-xs outline-none placeholder:text-neutral-400" />
+      <input value={repoPath} onChange={(e) => setRepoPath(e.target.value)} placeholder="仓库路径 repoPath"
+        className="w-full rounded-md border border-neutral-300 px-2.5 py-1.5 text-xs outline-none placeholder:text-neutral-400" />
+      <input value={worktreesDir} onChange={(e) => setWorktreesDir(e.target.value)} placeholder="worktree 目录 worktreesDir"
+        className="w-full rounded-md border border-neutral-300 px-2.5 py-1.5 text-xs outline-none placeholder:text-neutral-400" />
+      <input value={baseBranch} onChange={(e) => setBaseBranch(e.target.value)} placeholder="基线分支（可留空）"
+        className="w-full rounded-md border border-neutral-300 px-2.5 py-1.5 text-xs outline-none placeholder:text-neutral-400" />
+      {error && <p className="text-xs text-red-600">{error}</p>}
+      <div className="flex gap-1.5 pt-0.5">
+        <button onClick={submit} disabled={!name.trim() || !repoPath.trim() || !worktreesDir.trim()}
+          className="flex-1 rounded-md bg-neutral-900 px-2.5 py-1.5 text-xs font-medium text-white disabled:opacity-30">
+          创建
+        </button>
+        <button onClick={onCancel} className="rounded-md border border-neutral-200 px-2.5 py-1.5 text-xs text-neutral-600 hover:bg-neutral-50">
+          取消
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -463,10 +617,15 @@ function Composer({ value, onChange, onSend, placeholder, disabled }) {
 }
 
 /* ── 实现阶段 ─────────────────────────────────── */
-function Implementation({ req, busy, live, retryNote, onStart, onStop, onRun, onSend, onInvalidate }) {
+function Implementation({
+  req, busy, live, retryNote, onStart, onStop, onRun, onSend, onInvalidate,
+  onStepReset, onTicketReset, onFailureReason,
+}) {
   const [chatOpen, setChatOpen] = useState(false);
   const [input, setInput] = useState("");
   const blocked = (req.tickets || []).flatMap((t) => t.skills).find((s) => s.state === "fail" || s.state === "waiting");
+  const allDone = req.phase === "done" || (req.tickets?.length > 0 && req.tickets.every((t) => t.skills.every((s) => s.state === "pass")));
+  const needsAttribution = allDone && !isOnePass(req) && !req.failureReason;
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -502,12 +661,27 @@ function Implementation({ req, busy, live, retryNote, onStart, onStop, onRun, on
           {retryNote && (
             <div className="mx-auto mt-2 max-w-2xl truncate text-xs text-neutral-500">{retryNote}</div>
           )}
+          {needsAttribution && (
+            <div className="mx-auto mt-2 max-w-2xl">
+              <FailureAttribution onPick={onFailureReason} />
+            </div>
+          )}
+          {req.failureReason && (
+            <div className="mx-auto mt-2 max-w-2xl text-xs text-neutral-500">
+              归因：{FAILURE_REASON_LABEL[req.failureReason] || req.failureReason}
+            </div>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto">
           <div className="mx-auto max-w-2xl px-6 py-6">
             {(req.tickets || []).map((t) => (
-              <Ticket key={t.ticket} t={t} busy={busy} live={live} onRun={() => onRun(t.ticket)} />
+              <Ticket
+                key={t.ticket} t={t} busy={busy} live={live}
+                onRun={() => onRun(t.ticket)}
+                onStepReset={(skillName) => onStepReset(t.ticket, skillName)}
+                onTicketReset={() => onTicketReset(t.ticket)}
+              />
             ))}
             {!req.tickets?.length && <p className="text-neutral-500">还没有工单。</p>}
           </div>
@@ -568,8 +742,31 @@ function Implementation({ req, busy, live, retryNote, onStart, onStop, onRun, on
   );
 }
 
-function Ticket({ t, busy, live, onRun }) {
+const FAILURE_REASON_LABEL = {
+  unclear_requirement: "需求没定清",
+  implementation: "实现问题",
+  environment: "环境问题",
+};
+
+function FailureAttribution({ onPick }) {
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-neutral-200 px-3 py-2 text-xs">
+      <span className="text-neutral-500">未一次通过，归因：</span>
+      {Object.entries(FAILURE_REASON_LABEL).map(([k, label]) => (
+        <button
+          key={k} onClick={() => onPick(k)}
+          className="rounded border border-neutral-200 px-2 py-0.5 text-neutral-600 hover:bg-neutral-50"
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Ticket({ t, busy, live, onRun, onStepReset, onTicketReset }) {
   const allPass = t.skills.every((s) => s.state === "pass");
+  const anyStarted = t.skills.some((s) => s.state !== "idle");
   const [open, setOpen] = useState(!allPass);
   const next = t.skills.find((s) => s.state === "idle");
   return (
@@ -601,11 +798,23 @@ function Ticket({ t, busy, live, onRun }) {
             <Play className="h-3 w-3" /> 跑 {next.name}
           </button>
         )}
+        {anyStarted && (
+          <button
+            onClick={onTicketReset} disabled={busy}
+            title="只重置这个工单的状态与会话，不影响其它工单；此前的代码改动仍会留在分支历史里"
+            className="flex shrink-0 items-center gap-1 rounded-md border border-neutral-200 px-2 py-1 text-xs text-neutral-500 hover:bg-neutral-50 disabled:opacity-30"
+          >
+            <RotateCcw className="h-3 w-3" /> 重跑此工单
+          </button>
+        )}
       </div>
       {open && (
         <div className="space-y-1.5 pl-5">
           {t.skills.map((s) => (
-            <SkillRun key={s.name} s={s} live={s.state === "running" ? live : null} />
+            <SkillRun
+              key={s.name} s={s} live={s.state === "running" ? live : null} busy={busy}
+              onReset={s.state === "pass" || s.state === "fail" || s.state === "waiting" ? () => onStepReset(s.name) : null}
+            />
           ))}
         </div>
       )}
@@ -613,7 +822,7 @@ function Ticket({ t, busy, live, onRun }) {
   );
 }
 
-function SkillRun({ s, live }) {
+function SkillRun({ s, live, busy, onReset }) {
   const [open, setOpen] = useState(s.state === "fail");
   const running = s.state === "running" && live;
   const tools = running && live.tools?.length ? live.tools : s.tools;
@@ -645,6 +854,16 @@ function SkillRun({ s, live }) {
         )}
         {!running && s.note && (
           <span className="ml-auto truncate pl-2 text-xs text-neutral-500">{s.note}</span>
+        )}
+        {onReset && (
+          <span
+            role="button"
+            onClick={(e) => { e.stopPropagation(); if (!busy) onReset(); }}
+            title="只重跑这一步（及同工单内其后已完成的步骤）"
+            className={`ml-2 shrink-0 rounded border border-neutral-200 p-1 text-neutral-400 hover:bg-neutral-50 hover:text-neutral-700 ${busy ? "pointer-events-none opacity-30" : ""}`}
+          >
+            <RotateCcw className="h-3 w-3" />
+          </span>
         )}
       </button>
       {open && (

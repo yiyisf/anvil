@@ -38,7 +38,11 @@ async function waitReady(tries = 30) {
 try {
   await waitReady();
 
-  const req = await J("POST", "/api/reqs", { title: "用户导出" });
+  const projects = await J("GET", "/api/projects");
+  const projectId = projects[0]?.id;
+  console.log("0) 默认项目:", projectId);
+
+  const req = await J("POST", "/api/reqs", { title: "用户导出", projectId });
   console.log("1) 创建需求:", req.id, "| 阶段:", req.phase);
 
   const tree = `${TREES}/${req.id}`;

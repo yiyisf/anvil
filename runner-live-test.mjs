@@ -31,7 +31,12 @@ const fakeRunTurn = async ({ prompt, onEvent }) => {
 };
 
 const { startRun, subscribe, parseTickets } = await import("./server/runner.mjs");
-const { saveReq, getReq } = await import("./server/store.mjs");
+const { saveReq, getReq, newProject, saveProject } = await import("./server/store.mjs");
+
+const project = newProject({
+  name: "测试项目", repoPath: process.env.REPO_PATH, worktreesDir: process.env.WORKTREES_DIR,
+});
+await saveProject(project);
 
 /* 造需求：T-2 依赖 T-1，T-3 独立 */
 const tickets = parseTickets(`
@@ -40,7 +45,7 @@ const tickets = parseTickets(`
 - T-3 独立小改动
 `);
 await saveReq({
-  id: "REQ-RUN", title: "调度测试", phase: "impl",
+  id: "REQ-RUN", projectId: project.id, title: "调度测试", phase: "impl",
   dialog: [], settled: { fixed: [], open: [] }, implChat: [],
   tickets, createdAt: new Date().toISOString(),
 });
