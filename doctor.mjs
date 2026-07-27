@@ -11,6 +11,7 @@ import path from "node:path";
 import { Sandbox, ReadWriteFs } from "just-bash";
 import { createJustBashSandbox } from "@ai-sdk/sandbox-just-bash";
 import { registerTools, resolveToolConfig, agentToolProfile, resolveBinary } from "./server/tools.mjs";
+import { posixVirtualFs } from "./server/sandbox-path.mjs";
 
 const { WORKTREES_DIR, REPO_PATH } = process.env;
 const abs = (p) => (p ? path.resolve(p) : p);
@@ -162,12 +163,13 @@ line(`  （服务进程的 PATH：${(process.env.PATH || "").split(path.delimite
 /* ── 5. 通过真实 sandbox 会话执行 ── */
 line("\n【5】在 sandbox 会话里实际执行");
 const raw = await Sandbox.create({
-  fs: new ReadWriteFs({ root: WORKTREES_DIR }),
+  fs: posixVirtualFs(new ReadWriteFs({ root: WORKTREES_DIR })),
   cwd: "/",
   useDefaultLayout: false,
 });
 const registered = registerTools(raw, WORKTREES_DIR, tree);
 line(`  已注册：${registered.tools.join(", ")}`);
+line(`  沙箱内建：${registered.builtins.join(", ")}`);
 
 const provider = createJustBashSandbox({ sandbox: raw });
 const session = (await provider.createSession({ sessionId: "doctor" })).restricted();
@@ -183,9 +185,41 @@ for (const t of registered.tools) {
   else no(`${t}：exit=${r.exitCode} ${out.slice(0, 70)}`);
 }
 
+/* ── 6. pi 文件工具的路径解析（read/write/edit/grep/glob 都走这一步）── */
+line("\n【6】pi 路径解析（read 工具报「路径不可用」就看这里）");
+// 这段 shell 与 harness-pi 内部用的完全一致：先判存在，再用 realpath 规范化。
+// 少了 realpath 命令时，第一行过、第二行挂，报错却只说"路径不可用"，极具误导性。
+const piProbe = async (target) => {
+  const r = await session.run({
+    command: [
+      `target='${target}'`,
+      `if [ ! -e "$target" ]; then echo "__PI_REALPATH_NOT_FOUND__"; exit 2; fi`,
+      `resolved=$(realpath "$target" 2>/dev/null) || { echo "__PI_REALPATH_FAILED__"; exit 3; }`,
+      `printf '%s\\n' "$resolved"`,
+    ].join("; "),
+  });
+  return `${r.stdout || ""}${r.stderr || ""}`.trim().split("\n").filter(Boolean).at(-1) || "";
+};
+
+for (const target of [`/${reqId}`, `/${reqId}/.agent`]) {
+  const out = await piProbe(target);
+  if (out === "__PI_REALPATH_FAILED__") {
+    no(`${target}：realpath 不可用 → pi 会报「路径不可用 / Unable to resolve path」`);
+    line("    沙箱内建 realpath 没注册上（服务未重启，或改动没生效）。");
+  } else if (out === "__PI_REALPATH_NOT_FOUND__") {
+    no(`${target}：沙箱里不存在（worktree 缺失）`);
+  } else if (!out.startsWith("/")) {
+    no(`${target} → ${out}`);
+    line("    结果不是 posix 绝对路径（多为 Windows 反斜杠），pi 会判成越出工作区。");
+  } else {
+    ok(`${target} → ${out}`);
+  }
+}
+
 line("\n【结论提示】");
 line("  · command not found  → 配置没生效（多为 agent.config.json 未提交到仓库，或服务未重启）");
 line("  · 工作目录不存在      → worktree 没建出来，与命令无关（重建需求或作废重跑）");
 line("  · 宿主上找不到命令 X  → 桥接正常，是服务进程 PATH 缺它（注意 IDE 启动时 PATH 可能不同）");
 line("  · impl 无 bash 工具  → 先在 agentTools.impl.allow 里加回 bash");
+line("  · 路径不可用          → 【6】没过。跟文件在不在无关，是 realpath 那一步挂了");
 process.exit(0);

@@ -5,7 +5,8 @@
  */
 import { createJustBashSandbox } from "@ai-sdk/sandbox-just-bash";
 import { ReadWriteFs, Sandbox } from "just-bash";
-import { registerTools, toolList } from "./server/tools.mjs";
+import { registerTools } from "./server/tools.mjs";
+import { posixVirtualFs } from "./server/sandbox-path.mjs";
 import { mkdir, writeFile } from "node:fs/promises";
 
 const ROOT = process.env.WORKTREES_DIR || "/tmp/demo-trees";
@@ -14,12 +15,13 @@ await mkdir(`${ROOT}/${REQ}`, { recursive: true });
 await writeFile(`${ROOT}/${REQ}/package.json`, JSON.stringify({ name: "demo", version: "1.0.0" }, null, 2));
 
 const raw = await Sandbox.create({
-  fs: new ReadWriteFs({ root: ROOT }),
+  fs: posixVirtualFs(new ReadWriteFs({ root: ROOT })),
   cwd: "/",
   useDefaultLayout: false,
 });
-const names = registerTools(raw, ROOT);
-console.log("已桥接工具:", names.join(", "));
+const cfg = registerTools(raw, ROOT);
+console.log("已桥接工具:", cfg.tools.join(", "));
+console.log("沙箱内建  :", cfg.builtins.join(", "));
 
 const provider = createJustBashSandbox({ sandbox: raw });
 const netSession = await provider.createSession({ sessionId: "tt" });
@@ -38,6 +40,8 @@ for (const cmd of [
   `cd /${REQ} && node -e "console.log('cwd:', process.cwd())"`,
   `cd /${REQ} && node -e "console.log('读到 package.json:', require('./package.json').name)"`,
   `cd /${REQ} && ls`,
+  // pi 的 read/write/edit 都会先跑这一步；缺了它，界面上报的是「路径不可用」
+  `cd /${REQ} && realpath package.json`,
 ]) {
   const r = await run(cmd);
   console.log(`$ ${cmd.replace(`cd /${REQ} && `, "")}\n  exit=${r.code} → ${(r.out || r.err).slice(0, 90)}`);
