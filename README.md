@@ -124,6 +124,7 @@ node --env-file=.env doctor.mjs [需求ID]
 | `bash: java: command not found` | 命令**没注册**——配置没读到 | 见下方「配置必须提交」；或服务未重启 |
 | `[bridge] 工作目录不存在` | **worktree 没建出来**，与命令无关 | 重建需求，或做一次「作废重跑」 |
 | `[bridge] 宿主上找不到命令 java` | 已注册，但**服务进程的 PATH** 里没有 | 装上或用绝对路径；注意从 IDE 启动时 PATH 可能与登录 shell 不同，改完**重启 API** |
+| 「路径不可用」/ `Unable to resolve path` | 沙箱里缺 `realpath`，pi 的文件工具无法规范化路径 | 见「沙箱内建 realpath」；`doctor.mjs` 第 6 步会直接判定 |
 
 > 第二条容易误诊：`execFile` 在「命令不存在」和「工作目录不存在」两种情况下
 > 抛的都是 `spawn <cmd> ENOENT`，完全无法区分。桥接现在会先检查工作目录，
@@ -181,6 +182,39 @@ TOOL_TIMEOUT_MS=180000
 工作方式：sandbox 里执行 `npm test` → 桥接到宿主 `npm`，
 执行目录按沙箱 cwd 映射回真实 worktree（`/REQ-XXX` → `<WORKTREES_DIR>/REQ-XXX`）。
 未在白名单的命令仍然 127，内建命令不受影响。
+
+### 沙箱内建 realpath（与白名单无关，永远注册）
+
+`server/sandbox-path.mjs` 往每个 sandbox 注册一个纯 JS 实现的 `realpath`，
+直接操作沙箱 VFS，不走桥接、不受 `sandboxTools` 控制。
+
+**为什么必须有它**：harness-pi 的 read / write / edit / grep / glob 在动手前，
+都会先在沙箱里跑一段 shell 把路径规范化：
+
+```sh
+if [ ! -e "$target" ]; then echo __PI_REALPATH_NOT_FOUND__; exit 2; fi
+resolved=$(realpath "$target" 2>/dev/null) || { echo __PI_REALPATH_FAILED__; exit 3; }
+```
+
+just-bash 的命令表里有 `readlink`、**没有 `realpath`**，于是子 shell 127
+command not found，走进第二个分支，pi 抛 `Unable to resolve path`——
+界面上就是**「路径不可用」**。
+
+> 这个报错极具误导性：文件明明在，第一行的 `[ -e ]` 也过了，挂的是下一行。
+> 从"文件到底在不在"去查会全程查不出东西。
+
+也不能靠 `sandboxTools` 桥接宿主的 `realpath` 绕过：Windows 上没有这个二进制，
+且桥接过去的参数是沙箱路径（`/REQ-1/src/a.js`），宿主上并不存在。
+
+> **Windows 上还有第二层**：`ReadWriteFs` 返回的"虚拟路径"是把宿主真实路径的
+> root 前缀切掉得到的，于是带的是反斜杠——`D:\trees\REQ-1\src\a.js` 切成
+> `\REQ-1\src\a.js`。pi 用 `path.posix` 判断结果是否还在工作区内，
+> 反斜杠串一律判为越界（`Pi path escapes the readable roots`）。
+> 所以补了 `realpath` 命令还不够，`posixVirtualFs` 在 fs 层统一把
+> `realpath` / `readlink` 的返回值掰回 posix，`pwd -P` 也一并受益。
+
+`doctor.mjs` 第 6 步会跑与 pi 内部一模一样的那段 shell，直接告诉你这一步过没过。
+自检：`node pi-path-test.mjs`
 
 ### 按项目配置白名单
 

@@ -18,6 +18,7 @@ import { execFileSync } from "node:child_process";
 import crossSpawn from "cross-spawn";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import { registerSandboxBuiltins } from "./sandbox-path.mjs";
 
 const DEFAULT_TOOLS = "node,npm,npx,git";
 const CONFIG_NAME = "agent.config.json";
@@ -318,5 +319,8 @@ function bridge(name, root, timeout) {
 export function registerTools(sandbox, root, projectDir) {
   const { tools, timeout, source } = resolveToolConfig(projectDir);
   for (const n of tools) sandbox.bashEnvInstance.registerCommand(bridge(n, root, timeout));
-  return { tools, timeout, source };
+  // 沙箱内建命令：不受白名单控制，必须每个 sandbox 都有。
+  // 放在这里而不是各调用点，是为了不可能漏 —— 少了 realpath，pi 的文件工具全线不可用。
+  const builtins = registerSandboxBuiltins(sandbox);
+  return { tools, timeout, source, builtins };
 }

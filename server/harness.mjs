@@ -7,6 +7,7 @@ import { createPi } from "@ai-sdk/harness-pi";
 import { createJustBashSandbox } from "@ai-sdk/sandbox-just-bash";
 import { ReadWriteFs, Sandbox } from "just-bash";
 import { registerTools, agentToolSettings, resolveToolConfig } from "./tools.mjs";
+import { posixVirtualFs } from "./sandbox-path.mjs";
 import { envHint } from "./skills.mjs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -70,7 +71,9 @@ function buildHarness() {
  */
 async function buildAgent({ reqId, worktreesDir, instructions, skills, restore, phase = "impl" }) {
   const raw = await Sandbox.create({
-    fs: new ReadWriteFs({ root: worktreesDir }),
+    // ⚠️ posixVirtualFs：Windows 上 ReadWriteFs 会把宿主路径切出反斜杠形式的"虚拟路径"
+    //    （\REQ-1\src\a.js），pi 用 path.posix 校验会判成越界工作区。详见 sandbox-path.mjs
+    fs: posixVirtualFs(new ReadWriteFs({ root: worktreesDir })),
     cwd: "/",
     useDefaultLayout: false,
   });
