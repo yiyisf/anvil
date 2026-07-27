@@ -8,6 +8,7 @@ import { createJustBashSandbox } from "@ai-sdk/sandbox-just-bash";
 import { ReadWriteFs, Sandbox } from "just-bash";
 import { registerTools, agentToolSettings, resolveToolConfig } from "./tools.mjs";
 import { posixVirtualFs } from "./sandbox-path.mjs";
+import { mapStreamPart } from "./stream-map.mjs";
 import { envHint } from "./skills.mjs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -163,20 +164,15 @@ export async function runTurn({ reqId, worktreesDir, sessionKey, prompt, instruc
   try {
     const res = await agent.stream({ session, prompt });
     for await (const part of res.stream) {
-      if (part.type === "text-delta") {
-        const t = part.text ?? "";
-        out.text += t;
-        if (t) emit({ type: "text", text: t });
-      } else if (part.type === "reasoning-delta") {
-        if (part.text) emit({ type: "reasoning", text: part.text });
-      } else if (part.type?.startsWith("tool-") && part.toolName) {
-        const tool = { n: part.toolName, a: shortArg(part.input) };
-        out.tools.push(tool);
-        emit({ type: "tool", ...tool });
-      } else if (part.type === "dynamic-tool" && part.toolName === "fileChange") {
-        const p = part.input?.path;
-        if (p && !out.files.includes(p)) { out.files.push(p); emit({ type: "file", path: p }); }
+      const e = mapStreamPart(part);
+      if (!e) continue;
+      if (e.type === "text") out.text += e.text;
+      else if (e.type === "tool") out.tools.push({ n: e.n, a: e.a });
+      else if (e.type === "file") {
+        if (out.files.includes(e.path)) continue; // 同一文件反复改只记一次
+        out.files.push(e.path);
       }
+      emit(e);
     }
   } finally {
     // ⚠️ 顺序：先取 jsonl，再 stop
@@ -195,11 +191,4 @@ export async function runTurn({ reqId, worktreesDir, sessionKey, prompt, instruc
     });
   }
   return out;
-}
-
-function shortArg(input) {
-  if (input == null) return "";
-  if (typeof input === "string") return input.slice(0, 120);
-  const v = input.path ?? input.file_path ?? input.command ?? input.pattern;
-  return typeof v === "string" ? v.slice(0, 120) : JSON.stringify(input).slice(0, 120);
 }
