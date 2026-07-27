@@ -111,16 +111,6 @@ export function resolveToolConfig(projectDir) {
   }
 }
 
-/** 兼容旧调用 */
-export const toolList = () => resolveToolConfig().tools;
-
-/**
- * 造一个桥接命令：沙箱里的 <name> → 宿主真实 <name>
- * @param name 命令名
- * @param root 沙箱根对应的宿主目录（= WORKTREES_DIR）
- */
-
-
 /**
  * 解析命令的绝对路径（结果缓存）
  *
@@ -140,10 +130,8 @@ const resolveCache = new Map();
  * `where mvn` 两个都返回，取第一行往往是无扩展名的那个 —— Windows 根本执行不了，
  * 报错是 spawn ENOENT，看起来又像"没装"。必须按 PATHEXT 挑。
  * npm / npx / gradle / yarn 也是同样的情况。
- *
- * 导出以便单测。
  */
-export function pickWindowsBinary(lines, exists = existsSync) {
+function pickWindowsBinary(lines) {
   const exts = (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD")
     .split(";").map((e) => e.trim().toLowerCase()).filter(Boolean);
 
@@ -154,7 +142,7 @@ export function pickWindowsBinary(lines, exists = existsSync) {
   // 2) where 只给了无扩展名的脚本：试着补上常见可执行扩展
   for (const l of lines) {
     for (const e of [".cmd", ".bat", ".exe"]) {
-      if (exists(l + e)) return l + e;
+      if (existsSync(l + e)) return l + e;
     }
   }
   return lines[0] ?? null;
@@ -231,6 +219,12 @@ function killTree(child) {
   }
 }
 
+/**
+ * 造一个桥接命令：沙箱里的 <name> → 宿主真实 <name>
+ * @param name    命令名
+ * @param root    沙箱根对应的宿主目录（= WORKTREES_DIR）
+ * @param timeout 单条命令的超时（毫秒）
+ */
 function bridge(name, root, timeout) {
   return defineCommand(name, async (args, ctx) => {
     // 沙箱 cwd 形如 /REQ-XXXX/sub → 宿主 <root>/REQ-XXXX/sub

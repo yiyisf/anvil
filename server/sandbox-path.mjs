@@ -40,7 +40,7 @@ import { defineCommand } from "just-bash";
 const IS_WIN = process.platform === "win32";
 
 /** 宿主分隔符 → 沙箱分隔符。沙箱路径永远是 posix，这一点没有例外 */
-export const toPosixPath = (p) => String(p).replace(/\\/g, "/");
+const toPosixPath = (p) => String(p).replace(/\\/g, "/");
 
 /** IFileSystem 里只有这两个方法会把"虚拟路径"当返回值交出去 */
 const PATH_RETURNING = new Set(["realpath", "readlink"]);
@@ -48,10 +48,9 @@ const PATH_RETURNING = new Set(["realpath", "readlink"]);
 /**
  * 包一层，保证 fs 返回的虚拟路径始终是 posix 形式。
  * 非 Windows 上原样返回，不引入任何开销。
- * @param isWin 仅供单测强制走 Windows 分支；正常调用不要传
  */
-export function posixVirtualFs(fs, isWin = IS_WIN) {
-  if (!isWin) return fs;
+export function posixVirtualFs(fs) {
+  if (!IS_WIN) return fs;
   return new Proxy(fs, {
     get(target, prop) {
       const v = Reflect.get(target, prop);
@@ -113,7 +112,7 @@ async function canonicalize(fs, abs, mustExist) {
  * ⚠️ 输出纪律：pi 把 stdout 与 stderr 合并后取【最后一行非空输出】当结果，
  *    所以正常路径下除了结果本身不能再往任何一个流里写东西。
  */
-export function realpathCommand() {
+function realpathCommand() {
   return defineCommand("realpath", async (args, ctx) => {
     let mustExist = true; // GNU 默认：路径的每一级都必须存在
     let symlinks = true;
@@ -189,7 +188,7 @@ export function realpathCommand() {
  * 这些是纯 JS 实现、直接操作沙箱 VFS，不受白名单控制，也必须永远存在 ——
  * 少一个 realpath，pi 的全部文件工具就没法用了）。
  */
-export const SANDBOX_BUILTINS = ["realpath"];
+const SANDBOX_BUILTINS = ["realpath"];
 
 export function registerSandboxBuiltins(sandbox) {
   sandbox.bashEnvInstance.registerCommand(realpathCommand());

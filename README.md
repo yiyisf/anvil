@@ -32,9 +32,9 @@ BASE_BRANCH=main
 ### 自检（不需要模型）
 
 ```bash
-node e2e-test.mjs
+node --env-file=.env doctor.mjs [需求ID]
 ```
-验证需求创建、worktree 隔离、作废重跑。已通过。
+逐层检查环境路径、worktree、工具配置与沙箱内实际执行结果，详见下方「配置不生效时」。
 
 ## 走一遍完整流程
 
@@ -100,8 +100,6 @@ node e2e-test.mjs
 因为过滤是确定性的；`permissionMode` 走审批流，当前没有内建工具的审批 UI，
 设成需审批会让运行卡住，故统一 `allow-all`，由"有哪些工具"划边界。
 
-自检：`node layering-test.mjs`（已通过）
-
 ### 配置不生效时：先跑诊断
 
 ```bash
@@ -139,7 +137,6 @@ node --env-file=.env doctor.mjs [需求ID]
 > 和 Windows 批处理（`mvn.cmd`），`where mvn` 两个都返回。取第一行往往拿到前者，
 > Windows 执行不了，报错还是 ENOENT。现在会按 `PATHEXT` 优先挑 `.exe/.cmd/.bat`。
 > `doctor.mjs` 第 4 步会显示解析到的真实路径，批处理会标注出来。
-> 自检：`node winpath-test.mjs`
 
 > **PATH 处理**：just-bash 的 `ctx.env` 里带着它自己的虚拟 PATH（`/usr/bin:/bin`）。
 > 桥接执行宿主命令时**始终保留宿主真实 PATH**，不让虚拟 PATH 覆盖 —— 否则装在
@@ -214,7 +211,6 @@ command not found，走进第二个分支，pi 抛 `Unable to resolve path`—�
 > `realpath` / `readlink` 的返回值掰回 posix，`pwd -P` 也一并受益。
 
 `doctor.mjs` 第 6 步会跑与 pi 内部一模一样的那段 shell，直接告诉你这一步过没过。
-自检：`node pi-path-test.mjs`
 
 ### 按项目配置白名单
 
@@ -234,8 +230,6 @@ command not found，走进第二个分支，pi 抛 `Unable to resolve path`—�
 将来支持多项目时这里无需改动。
 
 调试：`DEBUG_TOOLS=1` 启动会打印每个需求实际注册了哪些工具及配置来源。
-
-自检：`node tools-in-harness-test.mjs`、`node tools-config-test.mjs`（均已通过）
 
 ### 安全边界
 
@@ -269,8 +263,6 @@ command not found，走进第二个分支，pi 抛 `Unable to resolve path`—�
 界面表现：分析阶段文字逐字出现；实现阶段运行中的 skill 自动展开，
 工具调用逐条浮现并显示调用次数。协议行（SETTLED / VERDICT）在流式过程中隐藏，
 避免出现半截 JSON。
-
-自检：`node stream-test.mjs`（已通过）
 
 ## 自动推进与工单依赖
 
@@ -315,8 +307,6 @@ command not found，走进第二个分支，pi 抛 `Unable to resolve path`—�
 重新打开会通过 `GET /api/events?id=` 接回事件流（长连接，带心跳，可中途接入并补发近期事件）。
 界面顶部有「暂停 / 继续推进」。
 
-自检：`node runner-test.mjs`（依赖解析与拓扑）、`node runner-live-test.mjs`（重试与阻塞传播），均已通过。
-
 ## 跨平台
 
 宿主命令的执行交给 **cross-spawn**（npm 自己在用的实现），它处理了这些差异：
@@ -336,10 +326,8 @@ command not found，走进第二个分支，pi 抛 `Unable to resolve path`—�
 | 代理写出跑不通的命令 | 实现阶段把「当前系统 + 可用命令清单」注入 instructions，并明确禁止执行 `./mvnw`、`*.sh` 等未桥接的脚本 |
 | Windows 上填了 `/d/xxx` 这类 git-bash 路径 | doctor 会检出并提示改成 `D:/xxx` |
 
-自检：`node xspawn-test.mjs`（执行/空格参数/超时终止/退出码/命令不存在）、`node winpath-test.mjs`
-
-> 说明：Windows 相关逻辑在 Linux 上以单测验证判定规则，未做真机验证；
-> 执行与转义已交给 cross-spawn，边界情况由它兜底。
+> 说明：Windows 相关逻辑（PATHEXT 挑选、路径分隔符还原）未做真机验证；
+> 执行与转义已交给 cross-spawn，边界情况由它兜底。`doctor.mjs` 可在真机上逐层核对。
 
 ## 已知边界（初稿）
 
