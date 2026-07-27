@@ -123,6 +123,18 @@ export default function App() {
   const [err, setErr] = useState(null);
   const [live, setLive] = useState(null); // 本轮流式内容 {text, tools, files}
   const [retryNote, setRetryNote] = useState(null);
+  /**
+   * 乐观回显：刚发出、服务端还没回执的那条用户消息 {reqId, text}
+   *
+   * 服务端确实在开跑前就把这条消息 push 进了 dialog，但整个 req 要等本轮跑完
+   * 才随 done 事件回来（流中途只有 text/tool/file 增量）。所以不本地回显的话，
+   * 用户发完消息会看着自己那句话消失，直到代理答完才突然冒出来。
+   * 由 act() 统一清除：成功时服务端返回的 dialog 已包含它，失败时它没被持久化。
+   */
+  const [pending, setPending] = useState(null);
+  // 带 reqId 是因为发送期间可以切换需求，不能把回显串到别的需求上
+  const pendingFor = (id) => (pending?.reqId === id ? pending.text : null);
+  const send = (id, text, call) => { setPending({ reqId: id, text }); act(call); };
 
   const onEvent = useCallback((e) => {
     setLive((cur) => {
@@ -183,7 +195,8 @@ export default function App() {
       if (next?.error) setErr(next.error);
       else { setReq(next); refreshList(); }
     } catch (e) { setErr(e.message); }
-    setBusy(false); setLive(null);
+    // 与 setReq 同一批更新里清除，回显不会闪一下
+    setBusy(false); setLive(null); setPending(null);
   }
 
   const visibleReqs = showAllProjects
@@ -224,18 +237,18 @@ export default function App() {
             )}
             {req.phase === "analysis" ? (
               <Analysis
-                req={req} busy={busy} live={live}
-                onSend={(t) => act(() => api.message(req.id, t, onEvent))}
+                req={req} busy={busy} live={live} pending={pendingFor(req.id)}
+                onSend={(t) => send(req.id, t, () => api.message(req.id, t, onEvent))}
                 onEdit={(s) => act(() => api.settled(req.id, s))}
                 onHandoff={() => act(() => api.handoff(req.id))}
               />
             ) : (
               <Implementation
-                req={req} busy={busy} live={live} retryNote={retryNote}
+                req={req} busy={busy} live={live} retryNote={retryNote} pending={pendingFor(req.id)}
                 onStart={() => act(async () => { const r = await api.start(req.id); setRetryNote(null); return r; })}
                 onStop={() => api.stop(req.id).then(() => api.get(req.id).then(setReq))}
                 onRun={(ticket) => act(() => api.run(req.id, ticket, onEvent))}
-                onSend={(t) => act(() => api.implMessage(req.id, t))}
+                onSend={(t) => send(req.id, t, () => api.implMessage(req.id, t))}
                 onInvalidate={(back) => act(() => api.invalidate(req.id, back))}
                 onStepReset={(ticket, skillName) => act(() => api.stepReset(req.id, ticket, skillName))}
                 onTicketReset={(ticket) => act(() => api.ticketReset(req.id, ticket))}
@@ -432,10 +445,10 @@ function PhaseHeader({ req, busy, onInvalidate }) {
 }
 
 /* ── 分析阶段 ─────────────────────────────────── */
-function Analysis({ req, busy, live, onSend, onEdit, onHandoff }) {
+function Analysis({ req, busy, live, pending, onSend, onEdit, onHandoff }) {
   const [input, setInput] = useState("");
   const ref = useRef(null);
-  useEffect(() => { if (ref.current) ref.current.scrollTop = ref.current.scrollHeight; }, [req.dialog, busy, live?.text]);
+  useEffect(() => { if (ref.current) ref.current.scrollTop = ref.current.scrollHeight; }, [req.dialog, pending, busy, live?.text]);
   const ready = req.settled.open.length === 0 && req.settled.fixed.length > 0;
 
   return (
@@ -443,10 +456,11 @@ function Analysis({ req, busy, live, onSend, onEdit, onHandoff }) {
       <div className="flex min-w-0 flex-1 flex-col">
         <div ref={ref} className="flex-1 overflow-y-auto">
           <div className="mx-auto max-w-2xl px-6 py-6">
-            {req.dialog.length === 0 && (
+            {req.dialog.length === 0 && !pending && (
               <p className="text-neutral-500">描述你要做的功能，代理会逐条问清边界。</p>
             )}
             {req.dialog.map((m, i) => <Msg key={i} m={m} />)}
+            {pending && <Msg m={{ role: "user", text: pending }} />}
             {live?.text && (
               <div className="py-2.5">
                 <p className="whitespace-pre-wrap leading-relaxed text-neutral-800">
@@ -591,6 +605,14 @@ function Msg({ m }) {
   );
 }
 
+function ImplUserMsg({ text }) {
+  return (
+    <div className="flex justify-end">
+      <div className="max-w-md whitespace-pre-wrap rounded-lg bg-neutral-100 px-3 py-2 text-xs leading-relaxed">{text}</div>
+    </div>
+  );
+}
+
 function Composer({ value, onChange, onSend, placeholder, disabled }) {
   return (
     <div className="shrink-0 border-t border-neutral-200 px-6 py-4">
@@ -618,7 +640,7 @@ function Composer({ value, onChange, onSend, placeholder, disabled }) {
 
 /* ── 实现阶段 ─────────────────────────────────── */
 function Implementation({
-  req, busy, live, retryNote, onStart, onStop, onRun, onSend, onInvalidate,
+  req, busy, live, retryNote, pending, onStart, onStop, onRun, onSend, onInvalidate,
   onStepReset, onTicketReset, onFailureReason,
 }) {
   const [chatOpen, setChatOpen] = useState(false);
@@ -688,18 +710,17 @@ function Implementation({
         </div>
 
         <div className="shrink-0 border-t border-neutral-200">
-          {chatOpen && req.implChat?.length > 0 && (
+          {chatOpen && (req.implChat?.length > 0 || pending) && (
             <div className="max-h-48 overflow-y-auto border-b border-neutral-200 px-6 py-3">
               <div className="mx-auto max-w-2xl space-y-2.5">
                 {req.implChat.map((m, i) =>
                   m.role === "user" ? (
-                    <div key={i} className="flex justify-end">
-                      <div className="max-w-md rounded-lg bg-neutral-100 px-3 py-2 text-xs leading-relaxed">{m.text}</div>
-                    </div>
+                    <ImplUserMsg key={i} text={m.text} />
                   ) : (
                     <p key={i} className="whitespace-pre-wrap text-xs leading-relaxed text-neutral-700">{m.text}</p>
                   )
                 )}
+                {pending && <ImplUserMsg text={pending} />}
               </div>
             </div>
           )}
