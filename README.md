@@ -62,6 +62,10 @@ node --env-file=.env doctor.mjs [需求ID]
 分析产物与代码改动同在一个 worktree、同一分支，作废重跑一次清干净。
 主仓库不受影响（已验证）。
 
+右栏的「改动文件」按**相对基线分支**统计：每跑完一个 skill 都会 `commitAll` 一次，
+只看 `git status` 的话工作区早已干净，清单会永远是空的。所以它取
+`base...HEAD` 的已提交改动，再叠上尚未提交的工作区状态。
+
 ## 两层工具：sandbox 环境依赖 vs agent 可用工具
 
 这是两件不同的事，配置也分开：
@@ -325,6 +329,26 @@ command not found，走进第二个分支，pi 抛 `Unable to resolve path`—�
 | 输出过大撑爆内存 | 超过 16MB 截断并终止 |
 | 代理写出跑不通的命令 | 实现阶段把「当前系统 + 可用命令清单」注入 instructions，并明确禁止执行 `./mvnw`、`*.sh` 等未桥接的脚本 |
 | Windows 上填了 `/d/xxx` 这类 git-bash 路径 | doctor 会检出并提示改成 `D:/xxx` |
+| CRLF 检出让 `edit` 工具必然失配 | 建 worktree 时加 `-c core.autocrlf=false -c core.eol=lf`，见下 |
+
+### 换行：worktree 一律按 LF 检出
+
+Git for Windows 安装器默认 `core.autocrlf=true`，检出会把库里的 LF 展开成 CRLF。
+代理的 `edit` 工具是**逐字节 `indexOf`**（`current.indexOf(oldText) === -1` 就报
+`Text to replace was not found`），而模型产出的 `old_string` 几乎总是 LF ——
+文件里是 `\r\n`、模型给的是 `\n`，永远匹配不上。
+
+症状很有迷惑性：`read` 一切正常，只有 `edit` 失败，代理于是退而用 `write` 整篇重写。
+改动面被放大，diff 里全是无关行，code-review 也就失去意义了。
+
+处理：`ensureWorktree` 只在 `worktree add` 这一条命令上加
+`-c core.autocrlf=false -c core.eol=lf`。
+
+- 只影响 anvil 自己建的 worktree，**不动用户仓库的配置**，主工作区不受牵连；
+- 库里存的始终是 LF，提交内容与之前逐字节相同；
+- 项目若确实需要 CRLF，`.gitattributes` 的 `eol=crlf` 优先级更高，仍然照旧生效。
+
+> 已存在的 worktree 是按老规则检出的，做一次「作废重跑」重建才会变成 LF。
 
 > 说明：Windows 相关逻辑（PATHEXT 挑选、路径分隔符还原）未做真机验证；
 > 执行与转义已交给 cross-spawn，边界情况由它兜底。`doctor.mjs` 可在真机上逐层核对。
