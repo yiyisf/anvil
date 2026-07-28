@@ -11,7 +11,7 @@ const api = {
   create: (title, projectId) => post("/api/reqs", { title, projectId }),
   message: (id, text, onEvent) => streamPost(`/api/message?id=${id}`, { text }, onEvent),
   implMessage: (id, text) => post(`/api/impl-message?id=${id}`, { text }),
-  handoff: (id) => post(`/api/handoff?id=${id}`, {}),
+  handoff: (id, onEvent) => streamPost(`/api/handoff?id=${id}`, {}, onEvent),
   run: (id, ticket, onEvent) => streamPost(`/api/run?id=${id}`, { ticket }, onEvent),
   settled: (id, settled) => post(`/api/settled?id=${id}`, { settled }),
   invalidate: (id, backToAnalysis) => post(`/api/invalidate?id=${id}`, { backToAnalysis }),
@@ -94,6 +94,52 @@ function subscribeRun(id, onEvent, onEnd) {
   return () => ctrl.abort();
 }
 
+/**
+ * 当前选中的需求放进地址栏（?id=REQ-XXXXX）
+ *
+ * 之前只存在 React state 里，F5 之后回到「选择或新建一个需求」，
+ * 分析已经做完、只差点「生成规格并移交实现」的时候尤其难受 ——
+ * 看起来像按钮消失了、进度丢了。放进 URL 后刷新与分享链接都能回到原处。
+ *
+ * 用 replaceState 而不是 pushState：切需求不算一次页面跳转，
+ * 不该让「后退」变成在需求之间倒着翻。
+ */
+const idFromUrl = () => new URLSearchParams(window.location.search).get("id");
+
+function writeIdToUrl(id) {
+  const u = new URL(window.location.href);
+  if (id) u.searchParams.set("id", id);
+  else u.searchParams.delete("id");
+  if (u.href !== window.location.href) window.history.replaceState(null, "", u);
+}
+
+/** 耗时显示：秒以内不值得看，超过一分钟按 m/s 拆开 */
+function fmtMs(ms) {
+  if (!ms || ms < 0) return null;
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m${String(s % 60).padStart(2, "0")}s`;
+}
+
+/**
+ * 运行中的秒表。
+ * 不用服务端的 startedAt 是因为两边时钟未必一致，跨机器会算出负数或几小时。
+ * 这里从"前端看到它开始跑"起算，只用于运行中的即时反馈；
+ * 落库统计的仍是服务端测的 step.ms。
+ */
+function useElapsed(active) {
+  const [ms, setMs] = useState(0);
+  useEffect(() => {
+    if (!active) return undefined;
+    const t0 = Date.now();
+    setMs(0);
+    const id = setInterval(() => setMs(Date.now() - t0), 1000);
+    return () => clearInterval(id);
+  }, [active]);
+  return ms;
+}
+
 /** 一次通过：全部完成、没重跑过、每步第一次尝试就 pass */
 function isOnePass(r) {
   if (r.phase !== "done" || r.everReset) return false;
@@ -117,7 +163,7 @@ export default function App() {
   const [projects, setProjects] = useState([]);
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [showAllProjects, setShowAllProjects] = useState(false);
-  const [activeId, setActiveId] = useState(null);
+  const [activeId, setActiveId] = useState(idFromUrl);
   const [req, setReq] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
@@ -143,6 +189,7 @@ export default function App() {
       if (e.type === "tool") return { ...s0, tools: [...s0.tools, { n: e.n, a: e.a }] };
       if (e.type === "file")
         return s0.files.includes(e.path) ? s0 : { ...s0, files: [...s0.files, e.path] };
+      if (e.type === "stage") return { ...s0, stages: [...(s0.stages || []), e.text] };
       if (e.type === "step") return { text: "", tools: [], files: [], step: e.skill };
       return s0;
     });
@@ -158,8 +205,17 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
+    writeIdToUrl(activeId);
     if (!activeId) return setReq(null);
-    api.get(activeId).then(setReq);
+    api.get(activeId).then((r) => {
+      // URL 里的 id 可能已经不存在（需求被删、换了机器）。不挡掉的话
+      // setReq({error}) 会让下面按 req.settled 取值时整页白屏。
+      if (!r || r.error) return setActiveId(null);
+      setReq(r);
+      // 需求未必属于当前选中的项目（从 URL 恢复时尤其如此），跟过去，
+      // 否则侧栏按项目过滤会把它藏起来，看着像没选中
+      if (r.projectId) setActiveProjectId(r.projectId);
+    });
   }, [activeId]);
 
   // 运行中订阅事件流：实时刷新 live 与需求状态
@@ -240,7 +296,7 @@ export default function App() {
                 req={req} busy={busy} live={live} pending={pendingFor(req.id)}
                 onSend={(t) => send(req.id, t, () => api.message(req.id, t, onEvent))}
                 onEdit={(s) => act(() => api.settled(req.id, s))}
-                onHandoff={() => act(() => api.handoff(req.id))}
+                onHandoff={() => act(() => api.handoff(req.id, onEvent))}
               />
             ) : (
               <Implementation
@@ -447,6 +503,9 @@ function PhaseHeader({ req, busy, onInvalidate }) {
 /* ── 分析阶段 ─────────────────────────────────── */
 function Analysis({ req, busy, live, pending, onSend, onEdit, onHandoff }) {
   const [input, setInput] = useState("");
+  // 只在"这一轮 busy 是移交引起的"时才把按钮换成进度，普通对话的 busy 不算
+  const [handingOff, setHandingOff] = useState(false);
+  useEffect(() => { if (!busy) setHandingOff(false); }, [busy]);
   const ref = useRef(null);
   useEffect(() => { if (ref.current) ref.current.scrollTop = ref.current.scrollHeight; }, [req.dialog, pending, busy, live?.text]);
   const ready = req.settled.open.length === 0 && req.settled.fixed.length > 0;
@@ -492,12 +551,14 @@ function Analysis({ req, busy, live, pending, onSend, onEdit, onHandoff }) {
         </div>
         <div className="shrink-0 border-t border-neutral-200 p-4">
           <button
-            onClick={onHandoff} disabled={!ready || busy}
-            className="w-full rounded-md bg-neutral-900 px-3 py-2 text-xs font-medium text-white disabled:bg-neutral-100 disabled:text-neutral-400"
+            onClick={() => { setHandingOff(true); onHandoff(); }} disabled={!ready || busy}
+            className="flex w-full items-center justify-center gap-1.5 rounded-md bg-neutral-900 px-3 py-2 text-xs font-medium text-white disabled:bg-neutral-100 disabled:text-neutral-400"
           >
-            生成规格并移交实现
+            {handingOff && busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {handingOff && busy ? "正在生成规格" : "生成规格并移交实现"}
           </button>
-          {!ready && (
+          {handingOff && busy && <HandoffProgress live={live} />}
+          {!handingOff && !ready && (
             <p className="mt-2 text-xs leading-relaxed text-neutral-500">
               {req.settled.fixed.length === 0
                 ? "还没有确定的条目。"
@@ -506,6 +567,44 @@ function Analysis({ req, busy, live, pending, onSend, onEdit, onHandoff }) {
           )}
         </div>
       </aside>
+    </div>
+  );
+}
+
+/**
+ * 移交过程的可视化
+ *
+ * 生成规格要等模型写完 spec.feature 与 tickets.md，十几秒到几分钟不等。
+ * 这里把三种进展都摆出来：服务端报的处理步骤、代理正在动的文件、模型的说明文字。
+ * 有东西在动，才不会被当成卡死。
+ */
+function HandoffProgress({ live }) {
+  const stages = live?.stages || [];
+  const files = live?.files || [];
+  const tail = stripProtocol(live?.text || "").slice(-160);
+  return (
+    <div className="mt-3 space-y-2 text-xs">
+      {stages.map((s, i) => (
+        <div key={i} className="flex gap-1.5 text-neutral-600">
+          {i === stages.length - 1 ? (
+            <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin text-neutral-400" />
+          ) : (
+            <Check className="mt-0.5 h-3 w-3 shrink-0 text-emerald-600" />
+          )}
+          <span className="leading-relaxed">{s}</span>
+        </div>
+      ))}
+      {files.length > 0 && (
+        <div className="space-y-0.5">
+          {files.map((f) => (
+            <div key={f} className="flex gap-1.5 font-mono text-neutral-500">
+              <FileText className="mt-0.5 h-3 w-3 shrink-0 text-neutral-400" />
+              <span className="truncate">{f}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {tail && <p className="whitespace-pre-wrap leading-relaxed text-neutral-400">{tail}</p>}
     </div>
   );
 }
@@ -790,6 +889,7 @@ function Ticket({ t, busy, live, onRun, onStepReset, onTicketReset }) {
   const anyStarted = t.skills.some((s) => s.state !== "idle");
   const [open, setOpen] = useState(!allPass);
   const next = t.skills.find((s) => s.state === "idle");
+  const totalMs = t.skills.reduce((n, s) => n + (s.ms || 0), 0); // 工单累计耗时
   return (
     <div className="mb-4">
       <div className="mb-2 flex items-center gap-2">
@@ -808,6 +908,11 @@ function Ticket({ t, busy, live, onRun, onStepReset, onTicketReset }) {
           {!open && allPass && (
             <span className="ml-auto flex items-center gap-1 text-xs text-neutral-500">
               <Check className="h-3.5 w-3.5 text-emerald-600" /> {t.skills.length} 步全过
+            </span>
+          )}
+          {totalMs > 0 && (
+            <span className={`shrink-0 font-mono text-xs text-neutral-400${!open && allPass ? "" : " ml-auto"}`}>
+              {fmtMs(totalMs)}
             </span>
           )}
         </button>
@@ -849,6 +954,9 @@ function SkillRun({ s, live, busy, onReset }) {
   const tools = running && live.tools?.length ? live.tools : s.tools;
   const files = running && live.files?.length ? live.files : s.files;
   const expandable = tools?.length || s.detail || files?.length;
+  // 运行中走秒表，跑完显示服务端测到的实际耗时（含重试累计）
+  const elapsed = useElapsed(s.state === "running");
+  const duration = s.state === "running" ? fmtMs((s.ms || 0) + elapsed) : fmtMs(s.ms);
   // 运行中自动展开，让进度可见
   useEffect(() => { if (running) setOpen(true); }, [running]);
   return (
@@ -875,6 +983,14 @@ function SkillRun({ s, live, busy, onReset }) {
         )}
         {!running && s.note && (
           <span className="ml-auto truncate pl-2 text-xs text-neutral-500">{s.note}</span>
+        )}
+        {duration && (
+          <span
+            className={`shrink-0 font-mono text-xs text-neutral-400${running || s.note ? " pl-2" : " ml-auto"}`}
+            title={s.attempt > 1 ? "含重试的累计耗时" : "本步耗时"}
+          >
+            {duration}
+          </span>
         )}
         {onReset && (
           <span
