@@ -134,6 +134,9 @@ async function runSkill({ req, project, ticket, step, extractVerdict, runTurn })
     step.attempt = attempt;
     step.tools = [];
     step.files = [];
+    // 计时：重试算作同一步的继续，累加而不是清零，否则"这步花了多久"会被少算
+    step.startedAt = Date.now();
+    if (attempt === 1) step.ms = 0;
     await saveReq(req);
     broadcast(req.id, { type: "step", ticket: ticket.ticket, skill: step.name, state: "running", attempt });
 
@@ -161,6 +164,8 @@ ${spec}
     });
 
     const v = extractVerdict(out.text);
+    step.ms = (step.ms || 0) + (Date.now() - step.startedAt);
+    step.startedAt = null;
     step.tools = out.tools.slice(0, 40);
     step.files = out.files;
     step.note = v.summary;

@@ -157,46 +157,6 @@ const routes = {
     };
   },
 
-  /* 移交：生成规格与工单写入 worktree，切到实现阶段 */
-  "POST /api/handoff": async ({ q }) => {
-    const req = await getReq(q.id);
-    if (!req) return { error: "not found" };
-    const project = await requireProject(req);
-
-    const summary = req.settled.fixed.map((x) => `- ${x.k}：${x.v}`).join("\n");
-    const out = await runTurn({
-      reqId: req.id,
-      worktreesDir: project.worktreesDir,
-      sessionKey: "analysis",
-      phase: "spec", // 需要写 spec.feature / tickets.md，故比分析阶段多 write/edit
-      prompt: `${SPEC_INSTRUCTIONS}\n\n已确定的需求条目：\n${summary}`,
-      instructions: ANALYST_INSTRUCTIONS,
-    });
-
-    // 模型未写文件时兜底，保证 worktree 里一定有规格
-    if (!(await readArtifact(project, req.id, "spec.feature"))) {
-      await writeArtifact(project, req.id, "spec.feature", `功能：${req.title}\n\n${summary}\n`);
-    }
-    const ticketsMd = (await readArtifact(project, req.id, "tickets.md")) || `- T-1 实现${req.title}`;
-    req.tickets = parseTickets(ticketsMd);
-    if (!req.tickets.length) {
-      req.tickets = parseTickets(`- T-1 ${req.title}`);
-    }
-    const cycle = findCycle(req.tickets);
-    if (cycle.length) {
-      // 依赖成环会让调度永远选不出工单，直接降级为无依赖，并告知用户
-      for (const t of req.tickets) t.deps = [];
-      req.warning = `工单依赖存在循环（${cycle.join(" → ")}），已忽略全部依赖，请检查 .agent/tickets.md`;
-    }
-
-    req.phase = "impl";
-    req.handoffNote = out.text.slice(0, 400);
-    await commitAll(project, req.id, `分析产物：${req.title}`);
-    await saveReq(req);
-    startRun(req.id, extractVerdict); // 移交后自动推进
-    return req;
-  },
-
   /* 实现阶段对话 */
   "POST /api/impl-message": async ({ q, body }) => {
     const req = await getReq(q.id);
@@ -317,8 +277,62 @@ const routes = {
 /**
  * 流式路由：响应为 NDJSON（每行一个 JSON 事件），最后一行是 {type:"done", req}
  * 事件： {type:"text"|"reasoning", text} | {type:"tool", n, a} | {type:"file", path}
+ *        {type:"stage", text} —— 模型之外的处理步骤，用于让长流程可见
  */
 const streamRoutes = {
+  /**
+   * 移交：生成规格与工单写入 worktree，切到实现阶段
+   *
+   * 走流式是因为这一步要等模型写完 spec.feature + tickets.md，通常十几秒到几分钟。
+   * 非流式的时候界面上只有一个变灰的按钮，看不出在干什么、也看不出还要多久，
+   * 容易被当成卡死而去刷新页面。stage 事件把模型之外的几步（兜底写规格、
+   * 解析工单、提交）也报出来，整个过程才是连续可见的。
+   */
+  "POST /api/handoff": async ({ q, emit }) => {
+    const req = await getReq(q.id);
+    if (!req) throw new Error("需求不存在");
+    const project = await requireProject(req);
+
+    const summary = req.settled.fixed.map((x) => `- ${x.k}：${x.v}`).join("\n");
+    emit({ type: "stage", text: "让代理按已确定的条目写规格与工单" });
+    const out = await runTurn({
+      reqId: req.id,
+      worktreesDir: project.worktreesDir,
+      sessionKey: "analysis",
+      phase: "spec", // 需要写 spec.feature / tickets.md，故比分析阶段多 write/edit
+      prompt: `${SPEC_INSTRUCTIONS}\n\n已确定的需求条目：\n${summary}`,
+      instructions: ANALYST_INSTRUCTIONS,
+      onEvent: emit,
+    });
+
+    // 模型未写文件时兜底，保证 worktree 里一定有规格
+    if (!(await readArtifact(project, req.id, "spec.feature"))) {
+      emit({ type: "stage", text: "代理没写规格文件，用已确定条目兜底生成" });
+      await writeArtifact(project, req.id, "spec.feature", `功能：${req.title}\n\n${summary}\n`);
+    }
+    emit({ type: "stage", text: "解析工单拆分" });
+    const ticketsMd = (await readArtifact(project, req.id, "tickets.md")) || `- T-1 实现${req.title}`;
+    req.tickets = parseTickets(ticketsMd);
+    if (!req.tickets.length) {
+      req.tickets = parseTickets(`- T-1 ${req.title}`);
+    }
+    const cycle = findCycle(req.tickets);
+    if (cycle.length) {
+      // 依赖成环会让调度永远选不出工单，直接降级为无依赖，并告知用户
+      for (const t of req.tickets) t.deps = [];
+      req.warning = `工单依赖存在循环（${cycle.join(" → ")}），已忽略全部依赖，请检查 .agent/tickets.md`;
+    }
+    emit({ type: "stage", text: `共 ${req.tickets.length} 个工单：${req.tickets.map((t) => t.ticket).join("、")}` });
+
+    req.phase = "impl";
+    req.handoffNote = out.text.slice(0, 400);
+    emit({ type: "stage", text: "提交产物到需求分支" });
+    await commitAll(project, req.id, `分析产物：${req.title}`);
+    await saveReq(req);
+    startRun(req.id, extractVerdict); // 移交后自动推进
+    return req;
+  },
+
   /* 分析阶段：一轮对话 */
   "POST /api/message": async ({ q, body, emit }) => {
     const req = await getReq(q.id);
@@ -352,6 +366,8 @@ const streamRoutes = {
     step.state = "running";
     step.tools = [];
     step.files = [];
+    step.startedAt = Date.now();
+    step.ms = 0;
     await saveReq(req);
     emit({ type: "step", ticket: t.ticket, skill: step.name, state: "running" });
 
@@ -368,6 +384,8 @@ ${spec}
     });
 
     const v = extractVerdict(out.text);
+    step.ms = Date.now() - step.startedAt;
+    step.startedAt = null;
     step.tools = out.tools.slice(0, 40);
     step.files = out.files;
     step.state = v.state;
