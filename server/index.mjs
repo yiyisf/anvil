@@ -19,6 +19,9 @@ import {
   startRun, stopRun, subscribe, isRunning, parseTickets, findCycle,
 } from "./runner.mjs";
 import { resolveToolConfig } from "./tools.mjs";
+import { createBuildWork, getBuildWork, listWorks } from "./v5-service.mjs";
+import { runActivity } from "./activity-runner-v5.mjs";
+import { getWork, getActivity } from "./store-v5.mjs";
 
 const PORT = Number(process.env.PORT || 8787);
 
@@ -26,6 +29,12 @@ const PORT = Number(process.env.PORT || 8787);
 async function requireProject(req) {
   const project = await getProject(req.projectId);
   if (!project) throw new Error(`需求 ${req.id} 找不到所属项目 ${req.projectId}`);
+  return project;
+}
+
+async function requireWorkProject(work) {
+  const project = await getProject(work.projectId);
+  if (!project) throw new Error(`Work ${work.id} 找不到所属项目 ${work.projectId}`);
   return project;
 }
 
@@ -80,11 +89,6 @@ function mergeSettled(cur, delta) {
   return { fixed, open };
 }
 
-/**
- * 解析 skill 的结构化结论。
- * 优先读 VERDICT: {...} 那一行；解析不到才退回关键词匹配（不可靠，仅兜底）。
- * 返回 { state:'pass'|'fail'|'waiting', summary, clean }
- */
 function extractVerdict(text) {
   const m = text.match(/^VERDICT:\s*(\{[\s\S]*?\})\s*$/m);
   if (m) {
@@ -100,9 +104,8 @@ function extractVerdict(text) {
           structured: true,
         };
       }
-    } catch { /* 落到兜底 */ }
+    } catch {}
   }
-  // 兜底：关键词匹配。模型没按协议输出时才走这里，会误判，仅作最后防线。
   const state = /超出范围|需要确认|无法继续|停下等/.test(text)
     ? "waiting"
     : /未通过|不通过|失败|测试挂/.test(text)
@@ -123,9 +126,7 @@ const routes = {
       worktreesDir: body.worktreesDir?.trim(),
       baseBranch: body.baseBranch?.trim() || "",
     });
-    if (!project.repoPath || !project.worktreesDir) {
-      return { error: "repoPath 和 worktreesDir 必填" };
-    }
+    if (!project.repoPath || !project.worktreesDir) return { error: "repoPath 和 worktreesDir 必填" };
     return saveProject(project);
   },
 
@@ -133,6 +134,30 @@ const routes = {
     const project = await getProject(q.id);
     if (!project) return { error: "not found" };
     return project;
+  },
+
+  /* v5-alpha: Work / Activity API. Legacy req routes remain available during migration. */
+  "GET /api/v5/works": async ({ q }) => listWorks(q.projectId || null),
+
+  "POST /api/v5/works": async ({ body }) => {
+    const project = await getProject(body.projectId);
+    if (!project) return { error: "项目不存在" };
+    const created = await createBuildWork({
+      projectId: project.id,
+      title: body.title?.trim() || "未命名工作",
+    });
+    await ensureWorktree(project, created.work.id);
+    return created;
+  },
+
+  "GET /api/v5/works/:id": async ({ q }) => {
+    const result = await getBuildWork(q.id);
+    return result || { error: "not found" };
+  },
+
+  "GET /api/v5/activities/:id": async ({ q }) => {
+    const activity = await getActivity(q.id);
+    return activity || { error: "not found" };
   },
 
   "GET /api/reqs": async () => listReqs(),
@@ -157,14 +182,11 @@ const routes = {
     };
   },
 
-  /* 实现阶段对话 */
   "POST /api/impl-message": async ({ q, body }) => {
     const req = await getReq(q.id);
     if (!req) return { error: "not found" };
     const project = await requireProject(req);
     req.implChat.push({ role: "user", text: body.text });
-    // 会话已按工单拆分：把人的介入送进"当前正在处理/最近处理"的那个工单会话，
-    // 否则代理没有刚才那段工作的上下文，回答会不着边际。
     const cur =
       req.tickets?.find((t) => t.skills.some((s) => s.state === "running")) ||
       req.tickets?.find((t) => t.skills.some((s) => s.state === "fail" || s.state === "waiting")) ||
@@ -182,7 +204,6 @@ const routes = {
     return req;
   },
 
-  /* 需求条目直接编辑 */
   "POST /api/settled": async ({ q, body }) => {
     const req = await getReq(q.id);
     if (!req) return { error: "not found" };
@@ -191,7 +212,6 @@ const routes = {
     return req;
   },
 
-  /* 启动自动推进（幂等：已在跑则忽略）*/
   "POST /api/start": async ({ q }) => {
     const req = await getReq(q.id);
     if (!req) return { error: "not found" };
@@ -199,32 +219,25 @@ const routes = {
     return { ...req, running: true, started };
   },
 
-  /* 暂停自动推进（当前 skill 跑完后停）*/
   "POST /api/stop": async ({ q }) => {
     stopRun(q.id);
     return { stopping: true };
   },
 
-  /* 作废重跑：销毁 worktree 与分支后重建，清空运行记录与实现会话 */
   "POST /api/invalidate": async ({ q, body }) => {
     const req = await getReq(q.id);
     if (!req) return { error: "not found" };
     const project = await requireProject(req);
     await resetWorktree(project, req.id);
-    await clearSessions(`${req.id}--impl`); // 会话已按工单拆分，需批量清理
+    await clearSessions(`${req.id}--impl`);
     req.tickets = [];
     req.implChat = [];
-    req.everReset = true; // 记为经历过重跑，纳入一次通过率统计时排除
+    req.everReset = true;
     req.phase = body.backToAnalysis ? "analysis" : "impl";
-    // 回分析阶段时保留对话与已定条目，方便补边界后重新移交
     await saveReq(req);
     return req;
   },
 
-  /**
-   * 重跑单个 step：不销毁 worktree/分支，只重置该 step（及同工单内其后已 pass 的
-   * step，因为它们依赖前序改动）为 idle，并清该工单的会话。
-   */
   "POST /api/step-reset": async ({ q, body }) => {
     const req = await getReq(q.id);
     if (!req) return { error: "not found" };
@@ -232,10 +245,7 @@ const routes = {
     if (!t) return { error: "工单不存在" };
     const idx = t.skills.findIndex((s) => s.name === body.skillName);
     if (idx < 0) return { error: "step 不存在" };
-
-    for (let i = idx; i < t.skills.length; i++) {
-      t.skills[i] = { name: t.skills[i].name, state: "idle" };
-    }
+    for (let i = idx; i < t.skills.length; i++) t.skills[i] = { name: t.skills[i].name, state: "idle" };
     t.blockedBy = null;
     req.everReset = true;
     await clearSessions(`${req.id}--impl-${t.ticket}`);
@@ -243,18 +253,11 @@ const routes = {
     return req;
   },
 
-  /**
-   * 重跑单个工单：把该工单的 skills 整体重置为初始态，只清该工单会话，
-   * 不动其它工单、不动 worktree/分支。
-   * 已知限制：该工单此前的 git 改动仍留在分支历史里（工单间共享同一 worktree、
-   * 线性 commit），重跑会在其基础上叠加新 commit，而不是真正回滚到工单开始前的状态。
-   */
   "POST /api/ticket-reset": async ({ q, body }) => {
     const req = await getReq(q.id);
     if (!req) return { error: "not found" };
     const t = req.tickets?.find((x) => x.ticket === body.ticket);
     if (!t) return { error: "工单不存在" };
-
     t.skills = SKILLS.map((s) => ({ name: s.name, state: "idle" }));
     t.blockedBy = null;
     req.everReset = true;
@@ -263,7 +266,6 @@ const routes = {
     return req;
   },
 
-  /* 一次通过率归因：需求非一次通过时人工标注原因 */
   "POST /api/reqs/:id/failure-reason": async ({ q, body }) => {
     const req = await getReq(q.id);
     if (!req) return { error: "not found" };
@@ -274,38 +276,37 @@ const routes = {
   },
 };
 
-/**
- * 流式路由：响应为 NDJSON（每行一个 JSON 事件），最后一行是 {type:"done", req}
- * 事件： {type:"text"|"reasoning", text} | {type:"tool", n, a} | {type:"file", path}
- *        {type:"stage", text} —— 模型之外的处理步骤，用于让长流程可见
- */
 const streamRoutes = {
-  /**
-   * 移交：生成规格与工单写入 worktree，切到实现阶段
-   *
-   * 走流式是因为这一步要等模型写完 spec.feature + tickets.md，通常十几秒到几分钟。
-   * 非流式的时候界面上只有一个变灰的按钮，看不出在干什么、也看不出还要多久，
-   * 容易被当成卡死而去刷新页面。stage 事件把模型之外的几步（兜底写规格、
-   * 解析工单、提交）也报出来，整个过程才是连续可见的。
-   */
+  /* v5-alpha activity execution. The Skill itself remains owned by Matt/Coding Agent. */
+  "POST /api/v5/activities/run": async ({ q, body, emit }) => {
+    const work = await getWork(body.workId || q.workId);
+    if (!work) throw new Error("Work 不存在");
+    const project = await requireWorkProject(work);
+    const result = await runActivity({
+      workId: work.id,
+      activityId: body.activityId || q.activityId,
+      project,
+      prompt: body.prompt || "",
+      onEvent: emit,
+    });
+    return result;
+  },
+
   "POST /api/handoff": async ({ q, emit }) => {
     const req = await getReq(q.id);
     if (!req) throw new Error("需求不存在");
     const project = await requireProject(req);
-
     const summary = req.settled.fixed.map((x) => `- ${x.k}：${x.v}`).join("\n");
     emit({ type: "stage", text: "让代理按已确定的条目写规格与工单" });
     const out = await runTurn({
       reqId: req.id,
       worktreesDir: project.worktreesDir,
       sessionKey: "analysis",
-      phase: "spec", // 需要写 spec.feature / tickets.md，故比分析阶段多 write/edit
+      phase: "spec",
       prompt: `${SPEC_INSTRUCTIONS}\n\n已确定的需求条目：\n${summary}`,
       instructions: ANALYST_INSTRUCTIONS,
       onEvent: emit,
     });
-
-    // 模型未写文件时兜底，保证 worktree 里一定有规格
     if (!(await readArtifact(project, req.id, "spec.feature"))) {
       emit({ type: "stage", text: "代理没写规格文件，用已确定条目兜底生成" });
       await writeArtifact(project, req.id, "spec.feature", `功能：${req.title}\n\n${summary}\n`);
@@ -313,39 +314,31 @@ const streamRoutes = {
     emit({ type: "stage", text: "解析工单拆分" });
     const ticketsMd = (await readArtifact(project, req.id, "tickets.md")) || `- T-1 实现${req.title}`;
     req.tickets = parseTickets(ticketsMd);
-    if (!req.tickets.length) {
-      req.tickets = parseTickets(`- T-1 ${req.title}`);
-    }
+    if (!req.tickets.length) req.tickets = parseTickets(`- T-1 ${req.title}`);
     const cycle = findCycle(req.tickets);
     if (cycle.length) {
-      // 依赖成环会让调度永远选不出工单，直接降级为无依赖，并告知用户
       for (const t of req.tickets) t.deps = [];
       req.warning = `工单依赖存在循环（${cycle.join(" → ")}），已忽略全部依赖，请检查 .agent/tickets.md`;
     }
     emit({ type: "stage", text: `共 ${req.tickets.length} 个工单：${req.tickets.map((t) => t.ticket).join("、")}` });
-
     req.phase = "impl";
     req.handoffNote = out.text.slice(0, 400);
     emit({ type: "stage", text: "提交产物到需求分支" });
     await commitAll(project, req.id, `分析产物：${req.title}`);
     await saveReq(req);
-    startRun(req.id, extractVerdict); // 移交后自动推进
+    startRun(req.id, extractVerdict);
     return req;
   },
 
-  /* 分析阶段：一轮对话 */
   "POST /api/message": async ({ q, body, emit }) => {
     const req = await getReq(q.id);
     if (!req) throw new Error("需求不存在");
     const project = await requireProject(req);
     req.dialog.push({ role: "user", text: body.text });
-
     const out = await runTurn({
       reqId: req.id, worktreesDir: project.worktreesDir, sessionKey: "analysis", phase: "analysis",
-      prompt: body.text, instructions: ANALYST_INSTRUCTIONS,
-      onEvent: emit,
+      prompt: body.text, instructions: ANALYST_INSTRUCTIONS, onEvent: emit,
     });
-
     const { clean, delta } = extractSettled(out.text);
     req.settled = mergeSettled(req.settled, delta);
     req.dialog.push({ role: "assistant", text: clean });
@@ -353,7 +346,6 @@ const streamRoutes = {
     return req;
   },
 
-  /* 实现阶段：跑指定工单的下一个 skill */
   "POST /api/run": async ({ q, body, emit }) => {
     const req = await getReq(q.id);
     if (!req) throw new Error("需求不存在");
@@ -362,7 +354,6 @@ const streamRoutes = {
     if (!t) throw new Error("没有工单");
     const step = t.skills.find((s) => s.state === "idle" || s.state === "running");
     if (!step) return req;
-
     step.state = "running";
     step.tools = [];
     step.files = [];
@@ -370,19 +361,12 @@ const streamRoutes = {
     step.ms = 0;
     await saveReq(req);
     emit({ type: "step", ticket: t.ticket, skill: step.name, state: "running" });
-
     const spec = (await readArtifact(project, req.id, "spec.feature")) || "";
     const out = await runTurn({
       reqId: req.id, worktreesDir: project.worktreesDir, sessionKey: `impl-${t.ticket}`, phase: "impl",
       instructions: IMPL_INSTRUCTIONS, skills: SKILLS, onEvent: emit,
-      prompt: `使用 ${step.name} skill 处理工单 ${t.ticket}：${t.title}
-
-规格：
-${spec}
-
-只做这个工单范围内的事。若必须改动范围外的对外接口，停下说明原因。`,
+      prompt: `使用 ${step.name} skill 处理工单 ${t.ticket}：${t.title}\n\n规格：\n${spec}\n\n只做这个工单范围内的事。若必须改动范围外的对外接口，停下说明原因。`,
     });
-
     const v = extractVerdict(out.text);
     step.ms = Date.now() - step.startedAt;
     step.startedAt = null;
@@ -392,21 +376,12 @@ ${spec}
     step.note = v.summary;
     step.verdictSource = v.structured ? "verdict" : "fallback";
     if (v.state !== "pass") step.detail = v.clean.slice(0, 800);
-    if (!v.structured) {
-      console.warn(`[run] ${t.ticket}/${step.name} 未按协议输出 VERDICT，已退回关键词判定`);
-    }
-
     await commitAll(project, req.id, `${t.ticket} ${step.name}`);
     await saveReq(req);
     return req;
   },
 };
 
-/**
- * 订阅某需求的运行事件（NDJSON 长连接）
- * 与流式路由不同：这是 GET、可随时接入、断线可重连，
- * 后台运行不因为客户端断开而中断。
- */
 function handleEvents(rq, rs, reqId) {
   rs.writeHead(200, {
     "content-type": "application/x-ndjson; charset=utf-8",
@@ -415,7 +390,6 @@ function handleEvents(rq, rs, reqId) {
     "connection": "keep-alive",
   });
   const write = (e) => { if (!rs.writableEnded) rs.write(JSON.stringify(e) + "\n"); };
-
   if (!isRunning(reqId)) {
     write({ type: "run", state: "idle" });
     return rs.end();
@@ -424,13 +398,11 @@ function handleEvents(rq, rs, reqId) {
     write(e);
     if (e.type === "closed") { unsub(); rs.end(); }
   });
-  // 心跳，避免中间层掐断空闲连接
   const hb = setInterval(() => write({ type: "ping" }), 20000);
   rq.on("close", () => { clearInterval(hb); unsub(); });
   rs.on("close", () => { clearInterval(hb); unsub(); });
 }
 
-/** 路径带 :id 这种占位符的路由需要单独匹配 */
 function matchParamRoute(table, method, pathname) {
   for (const key of Object.keys(table)) {
     const [m, pat] = key.split(" ");
@@ -451,11 +423,15 @@ const server = http.createServer(async (rq, rs) => {
   }
 
   let handler = routes[key];
-  const streamHandler = streamRoutes[key];
+  let streamHandler = streamRoutes[key];
   let paramId = null;
   if (!handler && !streamHandler) {
     const m = matchParamRoute(routes, rq.method, url.pathname);
     if (m) { handler = m.handler; paramId = m.params[0]; }
+    if (!handler) {
+      const sm = matchParamRoute(streamRoutes, rq.method, url.pathname);
+      if (sm) { streamHandler = sm.handler; paramId = sm.params[0]; }
+    }
   }
   rs.setHeader("Access-Control-Allow-Origin", "*");
   rs.setHeader("Access-Control-Allow-Headers", "content-type");
