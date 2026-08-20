@@ -12,6 +12,8 @@ export function decideNextBuildStep({ work, activities, frontier = null }) {
     if (activity.status === "failed") return { kind: "failed", activity };
     if (activity.status !== "completed") return { kind: "activity", activity };
   }
+  const implementationGate = activities.find((a) => a.type === "implementation" && a.status === "waiting_user" && a.gate);
+  if (implementationGate) return { kind: "gate", activity: implementationGate };
   if (!frontier) return { kind: "prepare_implementation" };
   if (frontier.counts.total > 0 && frontier.counts.completed === frontier.counts.total) return { kind: "complete" };
   if (frontier.frontier?.length) return { kind: "ticket", ticket: frontier.frontier[0] };
@@ -20,16 +22,30 @@ export function decideNextBuildStep({ work, activities, frontier = null }) {
 }
 
 export async function decideHumanGate({ workId, activityId, decision }) {
-  if (!new Set(["approve", "revise"]).has(decision)) throw new Error("decision 必须是 approve 或 revise");
   const work = await getWork(workId); if (!work) throw new Error(`Work 不存在: ${workId}`);
   const activity = await getActivity(activityId); if (!activity || activity.workId !== workId) throw new Error(`Activity 不存在: ${activityId}`);
   if (activity.status !== "waiting_user" || !activity.gate) throw new Error("当前 Activity 不在等待确认状态");
+  const allowed = activity.gate.options?.map((x) => x.action) || ["approve", "revise"];
+  if (!allowed.includes(decision)) throw new Error(`非法 decision: ${decision}`);
+  const decidedAt = new Date().toISOString(); activity.gate.decision = decision; activity.gate.decidedAt = decidedAt;
+
+  if (activity.gate.kind === "escalation" || activity.gate.kind === "external_action") {
+    activity.gate.status = "decided";
+    if (decision === "retry") { activity.status = "idle"; activity.gate = null; work.status = "active"; }
+    else if (decision === "replan") {
+      activity.status = "blocked";
+      const planning = (await listActivities(workId)).find((a) => a.type === "planning");
+      if (!planning) throw new Error("找不到 planning Activity");
+      planning.status = "idle"; planning.gate = null; planning.finishedAt = null; await saveActivity(planning);
+      work.currentActivityId = planning.id; work.status = "active";
+    } else if (decision === "stop") { activity.status = "failed"; work.status = "cancelled"; }
+    await saveActivity(activity); await saveWork(work); return { work, activity };
+  }
+
   activity.gate.status = decision === "approve" ? "approved" : "revision_requested";
-  activity.gate.decision = decision; activity.gate.decidedAt = new Date().toISOString();
   activity.status = decision === "approve" ? "completed" : "idle";
   work.status = decision === "approve" ? "active" : "waiting_user";
-  await saveActivity(activity); await saveWork(work);
-  return { work, activity };
+  await saveActivity(activity); await saveWork(work); return { work, activity };
 }
 
 export async function advanceBuild({ workId, project, onEvent, maxSteps = 50 }) {
@@ -39,13 +55,10 @@ export async function advanceBuild({ workId, project, onEvent, maxSteps = 50 }) 
     const activities = await listActivities(workId);
     const planning = activities.find((a) => a.type === "planning");
     let frontier = null;
-    if (planning?.status === "completed") {
-      await ensureImplementationActivities({ work, project });
-      frontier = await getTicketFrontier({ work, project });
-    }
+    if (planning?.status === "completed") { await ensureImplementationActivities({ work, project }); frontier = await getTicketFrontier({ work, project }); }
     const next = decideNextBuildStep({ work, activities: await listActivities(workId), frontier });
     onEvent?.({ type: "orchestrator", state: next.kind });
-    if (next.kind === "gate" || next.kind === "failed" || next.kind === "blocked" || next.kind === "running") return { reason: next.kind, work: await getWork(workId), next };
+    if (["gate", "failed", "blocked", "running"].includes(next.kind)) return { reason: next.kind, work: await getWork(workId), next };
     if (next.kind === "complete") { work.status = "completed"; work.currentActivityId = null; await saveWork(work); return { reason: "completed", work, next }; }
     if (next.kind === "prepare_implementation") continue;
     if (next.kind === "activity") { await runActivity({ workId, activityId: next.activity.id, project, onEvent }); continue; }
