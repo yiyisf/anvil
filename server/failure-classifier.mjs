@@ -4,8 +4,10 @@ function fingerprint(parts) {
   return crypto.createHash("sha1").update(parts.filter(Boolean).join("|")).digest("hex").slice(0, 16);
 }
 
-/** Cheap deterministic classification comes first. Semantic conflicts can be
- * added later from structured agent output instead of guessing from prose. */
+/**
+ * Prefer deterministic classification. Semantic conflicts should eventually
+ * come from structured agent output rather than brittle prose guessing.
+ */
 export function classifyFailure(error, context = {}) {
   const message = String(error?.message || error || "unknown error");
   const lower = message.toLowerCase();
@@ -16,6 +18,7 @@ export function classifyFailure(error, context = {}) {
   else if (/econnreset|econnrefused|enotfound|network|socket hang up/.test(lower)) type = "network_failure";
   else if (/context.{0,20}(length|window|limit)|token.{0,20}limit/.test(lower)) { category = "context"; type = "context_exhausted"; }
   else if (/merge conflict|unmerged paths|conflict \(content\)/.test(lower)) { category = "engineering"; type = "merge_conflict"; }
+  else if (/flaky|intermittent|regression|nondeterministic|race condition|root cause unknown|cannot reproduce/.test(lower)) { category = "engineering"; type = "unknown_regression"; }
   else if (/test(s)? failed|typecheck failed|assertionerror/.test(lower)) { category = "engineering"; type = "implementation_unresolved"; }
   else if (/credential|api key|permission denied|eacces/.test(lower)) { category = "infrastructure"; type = "external_dependency"; severity = "blocked"; }
 
