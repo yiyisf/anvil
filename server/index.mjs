@@ -4,46 +4,22 @@
  */
 import http from "node:http";
 import { runTurn } from "./harness.mjs";
-import {
-  listReqs, getReq, saveReq, newReq, clearSession, clearSessions,
-  listProjects, getProject, saveProject, newProject,
-} from "./store.mjs";
-import {
-  ensureWorktree, resetWorktree, writeArtifact, readArtifact,
-  changedFiles, commitAll, treePath,
-} from "./worktree.mjs";
-import {
-  ANALYST_INSTRUCTIONS, SPEC_INSTRUCTIONS, IMPL_INSTRUCTIONS, SKILLS,
-} from "./skills.mjs";
-import {
-  startRun, stopRun, subscribe, isRunning, parseTickets, findCycle,
-} from "./runner.mjs";
+import { listReqs, getReq, saveReq, newReq, clearSession, clearSessions, listProjects, getProject, saveProject, newProject } from "./store.mjs";
+import { ensureWorktree, resetWorktree, writeArtifact, readArtifact, changedFiles, commitAll, treePath } from "./worktree.mjs";
+import { ANALYST_INSTRUCTIONS, SPEC_INSTRUCTIONS, IMPL_INSTRUCTIONS, SKILLS } from "./skills.mjs";
+import { startRun, stopRun, subscribe, isRunning, parseTickets, findCycle } from "./runner.mjs";
 import { resolveToolConfig } from "./tools.mjs";
 import { createBuildWork, getBuildWork, listWorks } from "./v5-service.mjs";
 import { runActivity } from "./activity-runner-v5.mjs";
 import { getWork, getActivity } from "./store-v5.mjs";
 import { getTicketFrontier } from "./ticket-frontier-v5.mjs";
 import { ensureImplementationActivities, runFrontierTicket } from "./implementation-v5.mjs";
+import { advanceBuild, decideHumanGate } from "./build-orchestrator-v5.mjs";
 
 const PORT = Number(process.env.PORT || 8787);
-
-async function requireProject(req) {
-  const project = await getProject(req.projectId);
-  if (!project) throw new Error(`需求 ${req.id} 找不到所属项目 ${req.projectId}`);
-  return project;
-}
-async function requireWorkProject(work) {
-  const project = await getProject(work.projectId);
-  if (!project) throw new Error(`Work ${work.id} 找不到所属项目 ${work.projectId}`);
-  return project;
-}
-async function migrateLegacyProject() {
-  const projects = await listProjects(); if (projects.length) return;
-  const { REPO_PATH, WORKTREES_DIR, BASE_BRANCH } = process.env; if (!REPO_PATH || !WORKTREES_DIR) return;
-  const project = newProject({ name: "默认项目", repoPath: REPO_PATH, worktreesDir: WORKTREES_DIR, baseBranch: BASE_BRANCH || "" });
-  await saveProject(project); console.log(`[migrate] 创建默认项目 ${project.id}（repoPath=${REPO_PATH}）`);
-  const reqs = await listReqs(); for (const r of reqs) if (!r.projectId) { r.projectId = project.id; await saveReq(r); }
-}
+async function requireProject(req) { const project = await getProject(req.projectId); if (!project) throw new Error(`需求 ${req.id} 找不到所属项目 ${req.projectId}`); return project; }
+async function requireWorkProject(work) { const project = await getProject(work.projectId); if (!project) throw new Error(`Work ${work.id} 找不到所属项目 ${work.projectId}`); return project; }
+async function migrateLegacyProject() { const projects = await listProjects(); if (projects.length) return; const { REPO_PATH, WORKTREES_DIR, BASE_BRANCH } = process.env; if (!REPO_PATH || !WORKTREES_DIR) return; const project = newProject({ name: "默认项目", repoPath: REPO_PATH, worktreesDir: WORKTREES_DIR, baseBranch: BASE_BRANCH || "" }); await saveProject(project); console.log(`[migrate] 创建默认项目 ${project.id}（repoPath=${REPO_PATH}）`); const reqs = await listReqs(); for (const r of reqs) if (!r.projectId) { r.projectId = project.id; await saveReq(r); } }
 function extractSettled(text) { const m = text.match(/SETTLED:\s*(\{[\s\S]*?\})\s*$/m); if (!m) return { clean: text, delta: null }; try { return { clean: text.replace(m[0], "").trim(), delta: JSON.parse(m[1]) }; } catch { return { clean: text.replace(m[0], "").trim(), delta: null }; } }
 function mergeSettled(cur, delta) { if (!delta) return cur; const fixed = [...cur.fixed]; for (const it of delta.fixed || []) { const i = fixed.findIndex((x) => x.k === it.k); if (i >= 0) fixed[i] = it; else fixed.push(it); } const fixedKeys = new Set(fixed.map((x) => x.k)); return { fixed, open: (delta.open || []).filter((x) => !fixedKeys.has(x.k)) }; }
 function extractVerdict(text) { const m = text.match(/^VERDICT:\s*(\{[\s\S]*?\})\s*$/m); if (m) { try { const v = JSON.parse(m[1]); const state = { pass: "pass", fail: "fail", blocked: "waiting" }[v.state]; if (state) return { state, summary: String(v.summary || "").slice(0, 300), clean: text.replace(m[0], "").trim(), structured: true }; } catch {} } const state = /超出范围|需要确认|无法继续|停下等/.test(text) ? "waiting" : /未通过|不通过|失败|测试挂/.test(text) ? "fail" : "pass"; return { state, summary: text.slice(0, 160), clean: text, structured: false }; }
@@ -59,7 +35,7 @@ const routes = {
   "GET /api/v5/activities/:id": async ({ q }) => (await getActivity(q.id)) || { error: "not found" },
   "GET /api/v5/works/:id/tickets": async ({ q }) => { const work = await getWork(q.id); if (!work) return { error: "not found" }; const project = await requireWorkProject(work); return getTicketFrontier({ work, project, featureSlug: q.feature || null }); },
   "POST /api/v5/works/:id/implementation/prepare": async ({ q }) => { const work = await getWork(q.id); if (!work) return { error: "not found" }; const project = await requireWorkProject(work); return ensureImplementationActivities({ work, project }); },
-
+  "POST /api/v5/activities/:id/gate": async ({ q, body }) => decideHumanGate({ workId: body.workId, activityId: q.id, decision: body.decision }),
   "GET /api/reqs": async () => listReqs(),
   "POST /api/reqs": async ({ body }) => { const project = await getProject(body.projectId); if (!project) return { error: "项目不存在" }; const req = newReq(body.title?.trim() || "未命名需求", project.id); await ensureWorktree(project, req.id); return saveReq(req); },
   "GET /api/req": async ({ q }) => { const req = await getReq(q.id); if (!req) return { error: "not found" }; const project = await getProject(req.projectId); return { ...req, changed: project ? await changedFiles(project, req.id) : [], tree: project ? treePath(project, req.id) : null, running: isRunning(req.id) }; },
@@ -74,6 +50,7 @@ const routes = {
 };
 
 const streamRoutes = {
+  "POST /api/v5/build/advance": async ({ q, body, emit }) => { const work = await getWork(body.workId || q.workId); if (!work) throw new Error("Work 不存在"); const project = await requireWorkProject(work); return advanceBuild({ workId: work.id, project, onEvent: emit }); },
   "POST /api/v5/activities/run": async ({ q, body, emit }) => { const work = await getWork(body.workId || q.workId); if (!work) throw new Error("Work 不存在"); const project = await requireWorkProject(work); return runActivity({ workId: work.id, activityId: body.activityId || q.activityId, project, prompt: body.prompt || "", onEvent: emit }); },
   "POST /api/v5/implementation/run": async ({ q, body, emit }) => { const work = await getWork(body.workId || q.workId); if (!work) throw new Error("Work 不存在"); const project = await requireWorkProject(work); return runFrontierTicket({ workId: work.id, ticketId: body.ticketId || null, project, onEvent: emit }); },
   "POST /api/handoff": async ({ q, emit }) => { const req = await getReq(q.id); if (!req) throw new Error("需求不存在"); const project = await requireProject(req); const summary = req.settled.fixed.map((x) => `- ${x.k}：${x.v}`).join("\n"); emit({ type: "stage", text: "让代理按已确定的条目写规格与工单" }); const out = await runTurn({ reqId: req.id, worktreesDir: project.worktreesDir, sessionKey: "analysis", phase: "spec", prompt: `${SPEC_INSTRUCTIONS}\n\n已确定的需求条目：\n${summary}`, instructions: ANALYST_INSTRUCTIONS, onEvent: emit }); if (!(await readArtifact(project, req.id, "spec.feature"))) { emit({ type: "stage", text: "代理没写规格文件，用已确定条目兜底生成" }); await writeArtifact(project, req.id, "spec.feature", `功能：${req.title}\n\n${summary}\n`); } emit({ type: "stage", text: "解析工单拆分" }); const ticketsMd = (await readArtifact(project, req.id, "tickets.md")) || `- T-1 实现${req.title}`; req.tickets = parseTickets(ticketsMd); if (!req.tickets.length) req.tickets = parseTickets(`- T-1 ${req.title}`); const cycle = findCycle(req.tickets); if (cycle.length) { for (const t of req.tickets) t.deps = []; req.warning = `工单依赖存在循环（${cycle.join(" → ")}），已忽略全部依赖，请检查 .agent/tickets.md`; } emit({ type: "stage", text: `共 ${req.tickets.length} 个工单：${req.tickets.map((t) => t.ticket).join("、")}` }); req.phase = "impl"; req.handoffNote = out.text.slice(0, 400); emit({ type: "stage", text: "提交产物到需求分支" }); await commitAll(project, req.id, `分析产物：${req.title}`); await saveReq(req); startRun(req.id, extractVerdict); return req; },
