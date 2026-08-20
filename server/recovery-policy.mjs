@@ -9,6 +9,7 @@ const STRATEGIES = Object.freeze({
   network_failure: { strategy: "transient_retry", maxAttempts: 2 },
   tool_timeout: { strategy: "same_session_retry", maxAttempts: 2 },
   implementation_unresolved: { strategy: "same_session_retry", maxAttempts: 2 },
+  unknown_regression: { strategy: "skill_recovery", skill: "diagnosing-bugs", maxAttempts: 1 },
   merge_conflict: { strategy: "skill_recovery", skill: "resolving-merge-conflicts", maxAttempts: 1 },
   context_exhausted: { strategy: "fresh_session", maxAttempts: 2 },
   external_dependency: { strategy: "human_gate", gateKind: "external_action", maxAttempts: 0 },
