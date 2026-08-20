@@ -5,6 +5,7 @@ import { classifyFailure } from "./failure-classifier.mjs";
 import { newInterruption, resolveInterruption } from "./interruption.mjs";
 import { recoveryDecision } from "./recovery-policy.mjs";
 import { listInterruptions, saveActivity, saveInterruption, saveWork, saveAgentSession, saveSkillRun } from "./store-v5.mjs";
+import { createSessionHandoff, continuationPrompt } from "./session-lifecycle.mjs";
 
 function escalationGate(decision, interruption) {
   const exhausted = decision.reason === "recovery_budget_exhausted";
@@ -70,7 +71,22 @@ export async function executeRecovery({ work, activity, interruption, project, r
   try {
     if (strategy === "skill_recovery") await runRecoverySkill({ work, activity, interruption, project, onEvent });
     const fresh = strategy === "fresh_session" || strategy === "skill_recovery";
-    const result = await runOriginal({ prompt: retryPrompt(interruption), freshSession: fresh });
+    let prompt = retryPrompt(interruption);
+    if (fresh) {
+      try {
+        const handoff = await createSessionHandoff({ work, activity, project, onEvent });
+        activity.handoff = handoff;
+        await saveActivity(activity);
+        prompt = continuationPrompt(handoff, prompt);
+      } catch (handoffError) {
+        // Context exhaustion can make the old session unable to produce a handoff.
+        // In that case the new session reconstructs state from durable worktree artifacts.
+        activity.handoff = { text: "", error: handoffError.message, createdAt: new Date().toISOString() };
+        await saveActivity(activity);
+        prompt = continuationPrompt(activity.handoff, prompt);
+      }
+    }
+    const result = await runOriginal({ prompt, freshSession: fresh });
     resolveInterruption(interruption); await saveInterruption(interruption);
     return { recovered: true, result };
   } catch (error) {
