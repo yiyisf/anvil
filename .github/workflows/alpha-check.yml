@@ -1,0 +1,19 @@
+name: alpha-check
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [feat/v5-alpha-build-flow]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run check:v5
