@@ -1,5 +1,5 @@
 import { BUILD_SKILLS } from "./skill-adapter.mjs";
-import { newActivity } from "./model-v5.mjs";
+import { newActivity } from "./domain-model.mjs";
 
 export const BUILD_ACTIVITY_DEFINITIONS = Object.freeze([
   {
