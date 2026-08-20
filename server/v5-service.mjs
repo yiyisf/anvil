@@ -1,6 +1,6 @@
 import { newWork } from "./model-v5.mjs";
 import { createBuildActivities } from "./build-flow.mjs";
-import { saveWork, getWork, listWorks, saveActivity, listActivities } from "./store-v5.mjs";
+import { saveWork, getWork, listWorks, saveActivity, listActivities, listInterruptions } from "./store-v5.mjs";
 
 export async function createBuildWork({ projectId, title, legacyReqId = null }) {
   const work = newWork({ projectId, title, mode: "build", legacyReqId });
@@ -16,7 +16,8 @@ export async function getBuildWork(id) {
   const work = await getWork(id);
   if (!work) return null;
   const activities = (await listActivities(id)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  return { work, activities };
+  const interruptions = (await listInterruptions(id)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return { work, activities, interruptions };
 }
 
 export { listWorks };
