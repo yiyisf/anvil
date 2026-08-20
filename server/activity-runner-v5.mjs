@@ -1,6 +1,6 @@
 import { runTurn } from "./harness.mjs";
 import { buildSkillInvocation, loadMattSkillBundle } from "./skill-adapter.mjs";
-import { newAgentSession, newSkillRun } from "./model-v5.mjs";
+import { newAgentSession, newSkillRun } from "./domain-model.mjs";
 import { getActivity, saveActivity, getWork, saveWork, saveAgentSession, saveSkillRun } from "./store-v5.mjs";
 import { executeRecovery, planRecovery } from "./recovery-runner.mjs";
 
