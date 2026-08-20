@@ -8,26 +8,35 @@ export const BUILD_SKILLS = Object.freeze({
   implementation: "implement",
 });
 
-const ENGINEERING_SKILLS = new Set([
-  "grill-with-docs", "to-spec", "to-tickets", "implement", "code-review", "tdd",
-  "prototype", "wayfinder", "research", "diagnosing-bugs", "codebase-design", "domain-modeling",
-  "resolving-merge-conflicts",
-]);
-
-const SKILL_DEPENDENCIES = Object.freeze({
-  implement: ["tdd", "code-review"],
+const SKILL_GROUPS = Object.freeze({
+  "grill-with-docs": "engineering",
+  "to-spec": "engineering",
+  "to-tickets": "engineering",
+  implement: "engineering",
+  "code-review": "engineering",
+  tdd: "engineering",
+  prototype: "engineering",
+  wayfinder: "engineering",
+  research: "engineering",
+  "diagnosing-bugs": "engineering",
+  "codebase-design": "engineering",
+  "domain-modeling": "engineering",
+  "resolving-merge-conflicts": "engineering",
+  handoff: "productivity",
 });
+
+const SKILL_DEPENDENCIES = Object.freeze({ implement: ["tdd", "code-review"] });
 
 export function resolveMattSkillsRoot(env = process.env) {
   const configured = env.MATT_SKILLS_ROOT?.trim();
-  if (!configured) return null;
-  return path.resolve(configured);
+  return configured ? path.resolve(configured) : null;
 }
 
 export function skillPath(root, skillName) {
   if (!root) throw new Error("MATT_SKILLS_ROOT 未配置");
-  if (!ENGINEERING_SKILLS.has(skillName)) throw new Error(`未注册的 Matt engineering skill: ${skillName}`);
-  return path.join(root, "skills", "engineering", skillName, "SKILL.md");
+  const group = SKILL_GROUPS[skillName];
+  if (!group) throw new Error(`未注册的 Matt skill: ${skillName}`);
+  return path.join(root, "skills", group, skillName, "SKILL.md");
 }
 
 function parseFrontmatter(markdown) {
@@ -50,13 +59,7 @@ export async function loadMattSkill(skillName, { root = resolveMattSkillsRoot() 
   const file = skillPath(root, skillName);
   const markdown = await fs.readFile(file, "utf8");
   const { meta, body } = parseFrontmatter(markdown);
-  return {
-    name: meta.name || skillName,
-    description: meta.description || `Matt Pocock skill: ${skillName}`,
-    content: body.trim(),
-    file,
-    metadata: meta,
-  };
+  return { name: meta.name || skillName, description: meta.description || `Matt Pocock skill: ${skillName}`, content: body.trim(), file, metadata: meta };
 }
 
 export async function loadMattSkillBundle(skillName, options = {}) {
