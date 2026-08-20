@@ -1,5 +1,5 @@
 import { runTurn } from "./harness.mjs";
-import { buildSkillInvocation } from "./skill-adapter.mjs";
+import { buildSkillInvocation, loadMattSkillBundle } from "./skill-adapter.mjs";
 import { newAgentSession, newSkillRun } from "./model-v5.mjs";
 import {
   getActivity, saveActivity, getWork, saveWork,
@@ -14,7 +14,7 @@ const ACTIVITY_PHASE = {
 };
 
 function instructionsFor(activity) {
-  return `You are executing an Anvil engineering activity. Follow the requested installed Matt Pocock skill as the source of engineering method. Do not invent a parallel Anvil methodology. Current activity: ${activity.type}.`;
+  return `You are executing an Anvil engineering activity. Follow the requested Matt Pocock skill as the source of engineering method. Do not invent a parallel Anvil methodology. Current activity: ${activity.type}.`;
 }
 
 export async function runActivity({ workId, activityId, project, prompt = "", onEvent }) {
@@ -39,6 +39,7 @@ export async function runActivity({ workId, activityId, project, prompt = "", on
   await saveWork(work);
 
   const invocation = buildSkillInvocation(skill, prompt);
+  const skills = await loadMattSkillBundle(skill);
   try {
     const out = await runTurn({
       reqId: work.id,
@@ -46,6 +47,7 @@ export async function runActivity({ workId, activityId, project, prompt = "", on
       sessionKey: `activity-${activity.id}`,
       phase: ACTIVITY_PHASE[activity.type] || "impl",
       instructions: instructionsFor(activity),
+      skills,
       prompt: invocation,
       onEvent,
     });
