@@ -11,6 +11,7 @@ export const BUILD_SKILLS = Object.freeze({
 const ENGINEERING_SKILLS = new Set([
   "grill-with-docs", "to-spec", "to-tickets", "implement", "code-review", "tdd",
   "prototype", "wayfinder", "research", "diagnosing-bugs", "codebase-design", "domain-modeling",
+  "resolving-merge-conflicts",
 ]);
 
 const SKILL_DEPENDENCIES = Object.freeze({
@@ -38,9 +39,7 @@ function parseFrontmatter(markdown) {
       if (i < 0) continue;
       const key = line.slice(0, i).trim();
       let value = line.slice(i + 1).trim();
-      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-        value = value.slice(1, -1);
-      }
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
       meta[key] = value;
     }
   }
