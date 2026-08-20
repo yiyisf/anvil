@@ -44,6 +44,56 @@ export async function readLocalTickets(issuesDir) {
   return tickets;
 }
 
+async function statOrNull(file) {
+  try { return await fs.stat(file); } catch { return null; }
+}
+
+/**
+ * Matt to-tickets local tracker layout:
+ *   .scratch/<feature-slug>/issues/<NN>-<slug>.md
+ *
+ * A worktree may contain multiple historical feature folders, so pick the
+ * most recently modified issue set unless the caller supplies featureSlug.
+ */
+export async function discoverLocalTicketSet(worktreePath, { featureSlug = null } = {}) {
+  const scratch = path.join(worktreePath, ".scratch");
+  if (featureSlug) {
+    const issuesDir = path.join(scratch, featureSlug, "issues");
+    const st = await statOrNull(issuesDir);
+    if (!st?.isDirectory()) return null;
+    return { featureSlug, issuesDir, modifiedAt: st.mtimeMs };
+  }
+
+  let features;
+  try { features = await fs.readdir(scratch, { withFileTypes: true }); }
+  catch { return null; }
+
+  const candidates = [];
+  for (const feature of features) {
+    if (!feature.isDirectory()) continue;
+    const issuesDir = path.join(scratch, feature.name, "issues");
+    const st = await statOrNull(issuesDir);
+    if (!st?.isDirectory()) continue;
+    const issueFiles = (await fs.readdir(issuesDir)).filter((name) => name.endsWith(".md"));
+    if (!issueFiles.length) continue;
+    let newest = st.mtimeMs;
+    for (const name of issueFiles) {
+      const fst = await statOrNull(path.join(issuesDir, name));
+      if (fst) newest = Math.max(newest, fst.mtimeMs);
+    }
+    candidates.push({ featureSlug: feature.name, issuesDir, modifiedAt: newest });
+  }
+
+  candidates.sort((a, b) => b.modifiedAt - a.modifiedAt);
+  return candidates[0] || null;
+}
+
+export async function readDiscoveredLocalTickets(worktreePath, options = {}) {
+  const set = await discoverLocalTicketSet(worktreePath, options);
+  if (!set) return { featureSlug: null, issuesDir: null, tickets: [] };
+  return { ...set, tickets: await readLocalTickets(set.issuesDir) };
+}
+
 export function deriveTicketStates(tickets, completedIds = new Set(), runningIds = new Set()) {
   return tickets.map((ticket) => {
     const completed = completedIds.has(ticket.id);
