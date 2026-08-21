@@ -4,105 +4,46 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-/**
- * Core-chain E2E for Anvil-owned orchestration.
- * Agent/model execution is intentionally replaced by the state/artifacts it
- * would produce, so this test can run in CI without model credentials while
- * still crossing the real store, human gates, Matt ticket artifacts, frontier
- * derivation, and BUILD state-machine decisions.
- */
-test("BUILD core chain reaches completion through both human gates and ticket frontier", async (t) => {
+async function setup(t, title = "Adaptive BUILD") {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "anvil-build-e2e-"));
-  const dataDir = path.join(root, "data");
-  const worktreesDir = path.join(root, "worktrees");
-  process.env.DATA_DIR = dataDir;
+  process.env.DATA_DIR = path.join(root, "data");
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-
-  const [{ createBuildWork }, store, orchestrator, { getTicketFrontier }, { createImplementationActivity }, { treePath }] = await Promise.all([
-    import("./v5-service.mjs"),
-    import("./store-v5.mjs"),
-    import("./build-orchestrator-v5.mjs"),
-    import("./ticket-frontier-v5.mjs"),
-    import("./build-flow.mjs"),
-    import("./worktree.mjs"),
+  const [{ createBuildWork }, store, orchestrator, frontierModule, flow, worktreeModule] = await Promise.all([
+    import("./v5-service.mjs"), import("./store-v5.mjs"), import("./build-orchestrator-v5.mjs"), import("./ticket-frontier-v5.mjs"), import("./build-flow.mjs"), import("./worktree.mjs"),
   ]);
+  const project = { id: `P-${Date.now()}-${Math.random()}`, repoPath: root, worktreesDir: path.join(root, "worktrees"), baseBranch: "main" };
+  const { work } = await createBuildWork({ projectId: project.id, title });
+  const worktree = worktreeModule.treePath(project, work.id); await fs.mkdir(worktree, { recursive: true });
+  return { root, worktree, work, project, store, orchestrator, getTicketFrontier: frontierModule.getTicketFrontier, createImplementationActivity: flow.createImplementationActivity };
+}
 
-  const project = { id: "P-E2E", repoPath: root, worktreesDir, baseBranch: "main" };
-  const { work } = await createBuildWork({ projectId: project.id, title: "Member upgrade" });
-  // Use the same filesystem projection as production. Domain IDs stay long;
-  // only the worktree boundary is compacted for Windows-safe paths.
-  const worktree = treePath(project, work.id);
-  await fs.mkdir(worktree, { recursive: true });
+async function approveAlignment(ctx, route) {
+  let activities = await ctx.store.listActivities(ctx.work.id); const alignment = activities.find((a) => a.type === "alignment");
+  alignment.status = "waiting_user"; alignment.routeRecommendation = { route, reason: `test ${route}` }; await ctx.store.saveActivity(alignment);
+  await ctx.orchestrator.decideHumanGate({ workId: ctx.work.id, activityId: alignment.id, decision: "approve" });
+  return ctx.store.listActivities(ctx.work.id);
+}
 
-  let activities = await store.listActivities(work.id);
-  let next = orchestrator.decideNextBuildStep({ work, activities });
-  assert.equal(next.kind, "activity");
-  assert.equal(next.activity.type, "alignment");
+test("adaptive BUILD chooses direct implementation after alignment", async (t) => {
+  const ctx = await setup(t, "Tiny copy change"); const activities = await approveAlignment(ctx, "direct"); const work = await ctx.store.getWork(ctx.work.id);
+  assert.equal(work.buildRoute, "direct"); const next = ctx.orchestrator.decideNextBuildStep({ work, activities }); assert.equal(next.kind, "direct_implementation"); assert.equal(next.activity.type, "alignment");
+});
 
-  let alignment = activities.find((a) => a.type === "alignment");
-  alignment.status = "waiting_user";
-  await store.saveActivity(alignment);
-  activities = await store.listActivities(work.id);
-  next = orchestrator.decideNextBuildStep({ work: await store.getWork(work.id), activities });
-  assert.equal(next.kind, "gate");
-  assert.equal(next.activity.type, "alignment");
+test("adaptive BUILD chooses spec implementation without tickets", async (t) => {
+  const ctx = await setup(t, "Single feature with durable design"); let activities = await approveAlignment(ctx, "spec"); let work = await ctx.store.getWork(ctx.work.id);
+  assert.equal(work.buildRoute, "spec"); let next = ctx.orchestrator.decideNextBuildStep({ work, activities }); assert.equal(next.kind, "activity"); assert.equal(next.activity.type, "specification");
+  const specification = activities.find((a) => a.type === "specification"); specification.status = "completed"; specification.sessionId = "SESSION-spec-test"; await ctx.store.saveActivity(specification);
+  activities = await ctx.store.listActivities(work.id); work = await ctx.store.getWork(work.id); next = ctx.orchestrator.decideNextBuildStep({ work, activities }); assert.equal(next.kind, "spec_implementation"); assert.equal(next.activity.type, "specification");
+  assert.equal(activities.find((a) => a.type === "planning").status, "idle");
+});
 
-  await orchestrator.decideHumanGate({ workId: work.id, activityId: alignment.id, decision: "approve" });
-  activities = await store.listActivities(work.id);
-  next = orchestrator.decideNextBuildStep({ work: await store.getWork(work.id), activities });
-  assert.equal(next.kind, "activity");
-  assert.equal(next.activity.type, "specification");
-
-  const specification = activities.find((a) => a.type === "specification");
-  specification.status = "completed";
-  await store.saveActivity(specification);
-  activities = await store.listActivities(work.id);
-  next = orchestrator.decideNextBuildStep({ work: await store.getWork(work.id), activities });
-  assert.equal(next.kind, "activity");
-  assert.equal(next.activity.type, "planning");
-
-  const issuesDir = path.join(worktree, ".scratch", "member-upgrade", "issues");
-  await fs.mkdir(issuesDir, { recursive: true });
-  await fs.writeFile(path.join(issuesDir, "01-base.md"), `# 01: Base member\n\n**Blocked by:** none\n\n- [ ] base works\n`);
-  await fs.writeFile(path.join(issuesDir, "02-upgrade.md"), `# 02: Upgrade member\n\n**Blocked by:** 01: Base member\n\n- [ ] upgrade works\n`);
-
-  const planning = activities.find((a) => a.type === "planning");
-  planning.status = "waiting_user";
-  await store.saveActivity(planning);
-  activities = await store.listActivities(work.id);
-  next = orchestrator.decideNextBuildStep({ work: await store.getWork(work.id), activities });
-  assert.equal(next.kind, "gate");
-  assert.equal(next.activity.type, "planning");
-
-  await orchestrator.decideHumanGate({ workId: work.id, activityId: planning.id, decision: "approve" });
-  activities = await store.listActivities(work.id);
-
-  let frontier = await getTicketFrontier({ work: await store.getWork(work.id), project });
-  assert.equal(frontier.counts.total, 2);
-  assert.deepEqual(frontier.frontier.map((ticket) => ticket.id), ["01"]);
-  next = orchestrator.decideNextBuildStep({ work: await store.getWork(work.id), activities, frontier });
-  assert.equal(next.kind, "ticket");
-  assert.equal(next.ticket.id, "01");
-
-  const first = createImplementationActivity(work.id, frontier.tickets.find((ticket) => ticket.id === "01"));
-  first.status = "completed";
-  await store.saveActivity(first);
-  activities = await store.listActivities(work.id);
-  frontier = await getTicketFrontier({ work: await store.getWork(work.id), project });
-  assert.equal(frontier.tickets.find((ticket) => ticket.id === "01").status, "completed");
-  assert.deepEqual(frontier.frontier.map((ticket) => ticket.id), ["02"]);
-  next = orchestrator.decideNextBuildStep({ work: await store.getWork(work.id), activities, frontier });
-  assert.equal(next.kind, "ticket");
-  assert.equal(next.ticket.id, "02");
-
-  const second = createImplementationActivity(work.id, frontier.tickets.find((ticket) => ticket.id === "02"));
-  second.status = "completed";
-  await store.saveActivity(second);
-  activities = await store.listActivities(work.id);
-  frontier = await getTicketFrontier({ work: await store.getWork(work.id), project });
-  assert.equal(frontier.counts.completed, 2);
-  assert.equal(frontier.frontier.length, 0);
-
-  next = orchestrator.decideNextBuildStep({ work: await store.getWork(work.id), activities, frontier });
-  assert.equal(next.kind, "complete");
+test("adaptive BUILD keeps ticket frontier for decomposed work", async (t) => {
+  const ctx = await setup(t, "Member upgrade"); let activities = await approveAlignment(ctx, "tickets"); let work = await ctx.store.getWork(ctx.work.id);
+  assert.equal(work.buildRoute, "tickets"); let next = ctx.orchestrator.decideNextBuildStep({ work, activities }); assert.equal(next.activity.type, "specification");
+  const specification = activities.find((a) => a.type === "specification"); specification.status = "completed"; await ctx.store.saveActivity(specification); activities = await ctx.store.listActivities(work.id); next = ctx.orchestrator.decideNextBuildStep({ work, activities }); assert.equal(next.activity.type, "planning");
+  const issuesDir = path.join(ctx.worktree, ".scratch", "member-upgrade", "issues"); await fs.mkdir(issuesDir, { recursive: true }); await fs.writeFile(path.join(issuesDir, "01-base.md"), `# 01: Base member\n\n**Blocked by:** none\n\n- [ ] base works\n`); await fs.writeFile(path.join(issuesDir, "02-upgrade.md"), `# 02: Upgrade member\n\n**Blocked by:** 01: Base member\n\n- [ ] upgrade works\n`);
+  const planning = activities.find((a) => a.type === "planning"); planning.status = "waiting_user"; await ctx.store.saveActivity(planning); await ctx.orchestrator.decideHumanGate({ workId: work.id, activityId: planning.id, decision: "approve" }); activities = await ctx.store.listActivities(work.id);
+  let frontier = await ctx.getTicketFrontier({ work: await ctx.store.getWork(work.id), project: ctx.project }); assert.equal(frontier.counts.total, 2); assert.deepEqual(frontier.frontier.map((ticket) => ticket.id), ["01"]); next = ctx.orchestrator.decideNextBuildStep({ work: await ctx.store.getWork(work.id), activities, frontier }); assert.equal(next.kind, "ticket");
+  const first = ctx.createImplementationActivity(work.id, frontier.tickets.find((ticket) => ticket.id === "01")); first.status = "completed"; await ctx.store.saveActivity(first); activities = await ctx.store.listActivities(work.id); frontier = await ctx.getTicketFrontier({ work: await ctx.store.getWork(work.id), project: ctx.project }); assert.deepEqual(frontier.frontier.map((ticket) => ticket.id), ["02"]);
+  const second = ctx.createImplementationActivity(work.id, frontier.tickets.find((ticket) => ticket.id === "02")); second.status = "completed"; await ctx.store.saveActivity(second); activities = await ctx.store.listActivities(work.id); frontier = await ctx.getTicketFrontier({ work: await ctx.store.getWork(work.id), project: ctx.project }); next = ctx.orchestrator.decideNextBuildStep({ work: await ctx.store.getWork(work.id), activities, frontier }); assert.equal(next.kind, "complete");
 });
