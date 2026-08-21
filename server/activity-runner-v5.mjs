@@ -6,6 +6,12 @@ import { executeRecovery, planRecovery } from "./recovery-runner.mjs";
 
 const ACTIVITY_PHASE = { alignment: "analysis", specification: "spec", planning: "spec", implementation: "impl", recovery: "impl" };
 function instructionsFor(activity) { return `You are executing an Anvil engineering activity. Follow the requested Matt Pocock skill as the source of engineering method. Do not invent a parallel Anvil methodology. Current activity: ${activity.type}.`; }
+function appendConversation(activity, role, text) {
+  const clean = String(text || "").trim();
+  if (!clean) return;
+  activity.conversation ||= [];
+  activity.conversation.push({ role, text: clean, at: new Date().toISOString() });
+}
 
 export async function runActivity({ workId, activityId, project, prompt = "", onEvent }) {
   const work = await getWork(workId); if (!work) throw new Error(`Work 不存在: ${workId}`);
@@ -16,12 +22,14 @@ export async function runActivity({ workId, activityId, project, prompt = "", on
     const previousSessionId = activity.sessionId;
     const session = newAgentSession({ workId, activityId, ticketId: activity.ticketId, continuationOf: freshSession ? previousSessionId : null });
     const run = newSkillRun({ activityId, sessionId: session.id, skill });
+    if (activity.type === "alignment") appendConversation(activity, "user", nextPrompt);
     session.status = "active"; run.status = "running"; run.startedAt = new Date().toISOString(); activity.status = "running"; activity.sessionId = session.id; activity.startedAt ||= run.startedAt; work.currentActivityId = activity.id; work.status = "active";
     await saveAgentSession(session); await saveSkillRun(run); await saveActivity(activity); await saveWork(work);
     const invocation = buildSkillInvocation(skill, nextPrompt); const skills = await loadMattSkillBundle(skill);
     try {
       const out = await runTurn({ reqId: work.id, worktreesDir: project.worktreesDir, sessionKey: freshSession ? `activity-${activity.id}-${session.id}` : `activity-${activity.id}`, phase: ACTIVITY_PHASE[activity.type] || "impl", instructions: instructionsFor(activity), skills, prompt: invocation, onEvent });
       run.status = "completed"; run.summary = out.text.slice(0, 500); run.tools = out.tools.slice(0, 50); run.files = out.files; run.finishedAt = new Date().toISOString(); session.status = "completed";
+      if (activity.type === "alignment") appendConversation(activity, "assistant", out.text);
       if (activity.gate?.required) { activity.status = "waiting_user"; activity.gate.status = "waiting"; work.status = "waiting_user"; }
       else { activity.status = "completed"; work.status = "active"; }
       activity.finishedAt = new Date().toISOString();
