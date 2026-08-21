@@ -1,0 +1,97 @@
+# Anvil Architecture
+
+## Product intent
+
+Anvil productizes a proven engineering-skill workflow for people who should not need to understand or manually orchestrate individual coding-agent skills. The coding agent remains responsible for executing the upstream Matt Pocock skills; Anvil owns the product experience, lifecycle, safety boundaries, visibility, recovery and human interaction around that execution.
+
+The upper layer therefore does **not** implement a skill marketplace or duplicate skill logic. Skills are engineering capabilities selected when useful, not mandatory BPM steps.
+
+## Logical layers
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│ Product UI                                                   │
+│ requirement conversation · understanding · approval · status │
+├──────────────────────────────────────────────────────────────┤
+│ BUILD Orchestrator                                           │
+│ Work / Activity / Gate · adaptive route · recovery · frontier│
+├──────────────────────────────────────────────────────────────┤
+│ Coding Agent Session                                         │
+│ conversation continuity · context · tool execution           │
+├──────────────────────────────────────────────────────────────┤
+│ Skill Adapter                                                │
+│ loads and invokes upstream Matt Pocock skills                │
+├──────────────────────────────────────────────────────────────┤
+│ Harness / Sandbox / Worktree                                 │
+│ isolated files · command bridge · git lifecycle · validation │
+└──────────────────────────────────────────────────────────────┘
+```
+
+## Adaptive BUILD flow
+
+Requirement clarification is interactive. The alignment agent uses `grill-with-docs`, inspects the project and asks only questions that matter to implementation. When the requirement is clear enough, the agent recommends an engineering shape. Anvil stores that recommendation and the user confirms the requirement before execution continues.
+
+```text
+/grill-with-docs
+      │
+      ├── direct ───────────────► implement in the same agent session
+      │
+      ├── spec ─► /to-spec ────► implement from the specification context
+      │
+      └── tickets ─► /to-spec ─► /to-tickets ─► ticket implementation
+```
+
+The routes mean:
+
+- **direct** — small, clear work that should remain a single coding-agent session. No durable spec or ticket decomposition is manufactured merely to satisfy Anvil.
+- **spec** — the work benefits from a durable implementation specification, but decomposition into tickets would add ceremony without execution value.
+- **tickets** — decomposition is genuinely useful, for example because of multiple independent/dependent units of work or a larger execution surface.
+
+If the alignment agent does not provide a valid recommendation, Anvil currently falls back to the conservative `tickets` route rather than guessing that a complex task is small.
+
+## Session continuity
+
+A route transition does not imply that Anvil must create a new conceptual methodology. `direct` continues the Alignment coding-agent session into implementation. `spec` continues from the specification Activity's agent session, preserving the implementation context established by `/to-spec`. The ticket route uses ticket-oriented implementation Activities because decomposition is part of that route's engineering intent.
+
+## Domain model
+
+- **Work** — one user-visible BUILD lifecycle. Holds mode, status, workspace and selected `buildRoute`.
+- **Activity** — a meaningful engineering interaction such as alignment, specification, planning or implementation. It may reference an upstream skill and an Agent Session.
+- **AgentSession** — coding-agent conversational/execution context.
+- **SkillRun** — one observable skill/session execution record.
+- **Gate** — explicit human decision point. Requirement approval is the key transition from clarification to execution.
+- **Ticket** — only required by the `tickets` route.
+
+## Skill boundary
+
+Current BUILD mapping:
+
+| Product purpose | Upstream skill |
+| --- | --- |
+| clarify requirement | `grill-with-docs` |
+| create implementation specification | `to-spec` |
+| decompose larger work | `to-tickets` |
+| implementation engineering | `implement` (+ its configured dependencies) |
+
+Other upstream skills such as `prototype`, `wayfinder`, `handoff`, `research`, `diagnosing-bugs`, `codebase-design` and `domain-modeling` remain capabilities to introduce at appropriate product scenarios rather than mandatory global stages.
+
+## Safety and execution boundary
+
+The harness restricts tools by phase. Analysis is read-oriented, specification can write its artifacts, and implementation can modify code and execute configured commands. Each Work executes in an isolated git worktree. Recovery is modeled explicitly so recoverable execution failures can retry or resume without silently discarding the Work lifecycle.
+
+## Current implementation status
+
+Implemented in the current alpha BUILD path:
+
+- interactive requirement clarification and reply API;
+- requirement-understanding UI projection;
+- agent-generated adaptive route recommendation;
+- human approval before route adoption;
+- `direct`, `spec`, and `tickets` orchestration paths;
+- same-session direct implementation;
+- specification-context implementation without forced tickets;
+- ticket frontier implementation for decomposed work;
+- execution interruption/recovery model;
+- isolated worktree and tool/sandbox controls.
+
+The product UI should describe these choices in user language (for example, “直接开发”, “先制定方案”, “拆分开发任务”) rather than requiring non-engineers to understand skill names or route enum values.
