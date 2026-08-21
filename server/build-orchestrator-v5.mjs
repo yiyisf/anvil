@@ -2,16 +2,24 @@ import { getWork, saveWork, getActivity, saveActivity, listActivities } from "./
 import { runActivity } from "./activity-runner-v5.mjs";
 import { ensureImplementationActivities, runFrontierTicket } from "./implementation-v5.mjs";
 import { getTicketFrontier } from "./ticket-frontier-v5.mjs";
+import { setBuildRoute } from "./domain-model.mjs";
 
-const BUILD_ORDER = ["alignment", "specification", "planning"];
+const ROUTE_ORDER = Object.freeze({
+  direct: ["alignment"],
+  spec: ["alignment", "specification"],
+  tickets: ["alignment", "specification", "planning"],
+});
 
+export function buildOrder(work) { return ROUTE_ORDER[work.buildRoute] || ROUTE_ORDER.tickets; }
 export function decideNextBuildStep({ work, activities, frontier = null }) {
-  const ordered = BUILD_ORDER.map((type) => activities.find((a) => a.type === type)).filter(Boolean);
+  const ordered = buildOrder(work).map((type) => activities.find((a) => a.type === type)).filter(Boolean);
   for (const activity of ordered) {
     if (activity.status === "waiting_user") return { kind: "gate", activity };
     if (activity.status === "failed") return { kind: "failed", activity };
     if (activity.status !== "completed") return { kind: "activity", activity };
   }
+  if (work.buildRoute === "direct") return { kind: "direct_implementation" };
+  if (work.buildRoute === "spec") return { kind: "spec_implementation" };
   const implementationGate = activities.find((a) => a.type === "implementation" && a.status === "waiting_user" && a.gate);
   if (implementationGate) return { kind: "gate", activity: implementationGate };
   if (!frontier) return { kind: "prepare_implementation" };
@@ -21,7 +29,7 @@ export function decideNextBuildStep({ work, activities, frontier = null }) {
   return { kind: "blocked" };
 }
 
-export async function decideHumanGate({ workId, activityId, decision }) {
+export async function decideHumanGate({ workId, activityId, decision, route = null }) {
   const work = await getWork(workId); if (!work) throw new Error(`Work 不存在: ${workId}`);
   const activity = await getActivity(activityId); if (!activity || activity.workId !== workId) throw new Error(`Activity 不存在: ${activityId}`);
   if (activity.status !== "waiting_user" || !activity.gate) throw new Error("当前 Activity 不在等待确认状态");
@@ -42,6 +50,7 @@ export async function decideHumanGate({ workId, activityId, decision }) {
     await saveActivity(activity); await saveWork(work); return { work, activity };
   }
 
+  if (activity.type === "alignment" && decision === "approve" && route) setBuildRoute(work, route);
   activity.gate.status = decision === "approve" ? "approved" : "revision_requested";
   activity.status = decision === "approve" ? "completed" : "idle";
   work.status = decision === "approve" ? "active" : "waiting_user";
@@ -55,10 +64,10 @@ export async function advanceBuild({ workId, project, onEvent, maxSteps = 50 }) 
     const activities = await listActivities(workId);
     const planning = activities.find((a) => a.type === "planning");
     let frontier = null;
-    if (planning?.status === "completed") { await ensureImplementationActivities({ work, project }); frontier = await getTicketFrontier({ work, project }); }
+    if (work.buildRoute === "tickets" && planning?.status === "completed") { await ensureImplementationActivities({ work, project }); frontier = await getTicketFrontier({ work, project }); }
     const next = decideNextBuildStep({ work, activities: await listActivities(workId), frontier });
     onEvent?.({ type: "orchestrator", state: next.kind });
-    if (["gate", "failed", "blocked", "running"].includes(next.kind)) return { reason: next.kind, work: await getWork(workId), next };
+    if (["gate", "failed", "blocked", "running", "direct_implementation", "spec_implementation"].includes(next.kind)) return { reason: next.kind, work: await getWork(workId), next };
     if (next.kind === "complete") { work.status = "completed"; work.currentActivityId = null; await saveWork(work); return { reason: "completed", work, next }; }
     if (next.kind === "prepare_implementation") continue;
     if (next.kind === "activity") { await runActivity({ workId, activityId: next.activity.id, project, onEvent }); continue; }
