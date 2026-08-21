@@ -2,6 +2,9 @@
   "name": "v4-console",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
     "dev": "concurrently -n api,ui -c blue,green \"node --env-file=.env server/index.mjs\" \"vite\"",
     "api": "node --env-file=.env server/index.mjs",
