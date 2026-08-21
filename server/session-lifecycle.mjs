@@ -30,7 +30,7 @@ export function continuationPrompt(handoff, originalPrompt = "") {
   const task = String(originalPrompt || "").trim();
   return [
     "Continue the same Anvil activity in a fresh agent session.",
-    "Treat the following handoff as continuation context; verify referenced artifacts in the worktree when needed.",
+    "Treat the following handoff as continuation context; verify referenced durable worktree artifacts when needed.",
     "",
     handoff?.text || "No handoff text was available; recover state from durable worktree artifacts.",
     task ? `\nOriginal activity instruction:\n${task}` : "",
