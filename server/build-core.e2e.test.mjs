@@ -18,17 +18,20 @@ test("BUILD core chain reaches completion through both human gates and ticket fr
   process.env.DATA_DIR = dataDir;
   t.after(() => fs.rm(root, { recursive: true, force: true }));
 
-  const [{ createBuildWork }, store, orchestrator, { getTicketFrontier }, { createImplementationActivity }] = await Promise.all([
+  const [{ createBuildWork }, store, orchestrator, { getTicketFrontier }, { createImplementationActivity }, { treePath }] = await Promise.all([
     import("./v5-service.mjs"),
     import("./store-v5.mjs"),
     import("./build-orchestrator-v5.mjs"),
     import("./ticket-frontier-v5.mjs"),
     import("./build-flow.mjs"),
+    import("./worktree.mjs"),
   ]);
 
   const project = { id: "P-E2E", repoPath: root, worktreesDir, baseBranch: "main" };
   const { work } = await createBuildWork({ projectId: project.id, title: "Member upgrade" });
-  const worktree = path.join(worktreesDir, work.id);
+  // Use the same filesystem projection as production. Domain IDs stay long;
+  // only the worktree boundary is compacted for Windows-safe paths.
+  const worktree = treePath(project, work.id);
   await fs.mkdir(worktree, { recursive: true });
 
   let activities = await store.listActivities(work.id);
@@ -36,7 +39,6 @@ test("BUILD core chain reaches completion through both human gates and ticket fr
   assert.equal(next.kind, "activity");
   assert.equal(next.activity.type, "alignment");
 
-  // grill-with-docs finishes and asks the product owner to confirm boundaries.
   let alignment = activities.find((a) => a.type === "alignment");
   alignment.status = "waiting_user";
   await store.saveActivity(alignment);
@@ -51,7 +53,6 @@ test("BUILD core chain reaches completion through both human gates and ticket fr
   assert.equal(next.kind, "activity");
   assert.equal(next.activity.type, "specification");
 
-  // to-spec is deliberately non-gated and auto-advances once completed.
   const specification = activities.find((a) => a.type === "specification");
   specification.status = "completed";
   await store.saveActivity(specification);
@@ -60,7 +61,6 @@ test("BUILD core chain reaches completion through both human gates and ticket fr
   assert.equal(next.kind, "activity");
   assert.equal(next.activity.type, "planning");
 
-  // to-tickets produces the current Matt local tracker format.
   const issuesDir = path.join(worktree, ".scratch", "member-upgrade", "issues");
   await fs.mkdir(issuesDir, { recursive: true });
   await fs.writeFile(path.join(issuesDir, "01-base.md"), `# 01: Base member\n\n**Blocked by:** none\n\n- [ ] base works\n`);
@@ -84,7 +84,6 @@ test("BUILD core chain reaches completion through both human gates and ticket fr
   assert.equal(next.kind, "ticket");
   assert.equal(next.ticket.id, "01");
 
-  // /implement ticket 01 completes; dependency graph must unlock ticket 02.
   const first = createImplementationActivity(work.id, frontier.tickets.find((ticket) => ticket.id === "01"));
   first.status = "completed";
   await store.saveActivity(first);
