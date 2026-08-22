@@ -2,10 +2,15 @@
   "name": "v4-console",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
     "dev": "concurrently -n api,ui -c blue,green \"node --env-file=.env server/index.mjs\" \"vite\"",
     "api": "node --env-file=.env server/index.mjs",
-    "ui": "vite"
+    "ui": "vite",
+    "test:v5": "node --test server/v5-alpha.test.mjs server/build-core.e2e.test.mjs server/worktree.test.mjs",
+    "check:v5": "npm run test:v5 && vite build"
   },
   "dependencies": {
     "@ai-sdk/harness": "1.0.39",
