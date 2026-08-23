@@ -58,10 +58,10 @@ PI_PROVIDER=anthropic
 REPO_PATH=/path/to/your/repo
 WORKTREES_DIR=/path/to/worktrees
 BASE_BRANCH=main
-MATT_SKILLS_ROOT=/path/to/matt-pocock-skills
+MATT_SKILLS_ROOT=/path/to/optional-skills-root
 ```
 
-`MATT_SKILLS_ROOT` 指向本地 Skills 仓库。Anvil 在运行时加载 Skill 内容并交给 Coding Agent，而不是复制一套 Skill 实现。
+Anvil 默认从当前项目的 `.agents/skills/<skill>/SKILL.md` 加载 Skills。只有需要覆盖默认安装位置时才配置 `MATT_SKILLS_ROOT`；同时支持 Matt Skills 仓库的分组目录布局。
 
 ## 使用 BUILD
 
@@ -88,16 +88,16 @@ MATT_SKILLS_ROOT=/path/to/matt-pocock-skills
     src/...       # 实际代码修改
 ```
 
-不要依赖 worktree 文件夹名称作为领域 ID；Work 与 worktree 的映射由 `server/worktree.mjs` 管理。
+不要依赖 worktree 文件夹名称作为领域 ID；Work 与 worktree 的映射由 `server/platform/workspace-manager.mjs` 管理。
 
 ## Agent 与 Sandbox
 
 Anvil 将 Agent 可调用工具和 Sandbox 可执行的真实二进制分成两层：
 
-| 层 | 作用 |
-|---|---|
-| Agent tools | 决定 Coding Agent 能使用 read/write/edit/bash/grep/glob 等哪些能力 |
-| Sandbox tools | 决定 `bash` 内能执行 node/npm/git/mvn/python 等哪些宿主二进制 |
+| 层            | 作用                                                               |
+| ------------- | ------------------------------------------------------------------ |
+| Agent tools   | 决定 Coding Agent 能使用 read/write/edit/bash/grep/glob 等哪些能力 |
+| Sandbox tools | 决定 `bash` 内能执行 node/npm/git/mvn/python 等哪些宿主二进制      |
 
 需求分析阶段默认限制为读取型工具；实现阶段才开放修改与执行能力。Sandbox 仍通过白名单桥接宿主工具，并保留路径隔离。
 
@@ -111,16 +111,16 @@ node --env-file=.env doctor.mjs
 
 ```text
 src/
-  v5-work-view.jsx          BUILD 产品界面
+  app/                       应用外壳与项目选择
+  build/                     BUILD 界面及状态投影
+  shared/                    HTTP/NDJSON 客户端
 server/
-  domain-model.mjs          Work / Activity / Session 等领域模型
-  build-orchestrator-v5.mjs Adaptive BUILD 状态决策
-  activity-runner-v5.mjs    Skill 与 Agent Session 执行
-  skill-adapter.mjs         Matt Skills 加载边界
-  ticket-frontier-v5.mjs    Ticket 依赖与可执行 Frontier
-  recovery-runner.mjs       异常恢复
-  worktree.mjs              Git worktree 隔离与短路径映射
-  harness.mjs               Coding Agent / sandbox 运行边界
+  build/                     Work / Activity、编排、恢复与 Ticket Frontier
+  http/                      HTTP 传输与 BUILD/Project 路由
+  persistence/               BUILD、Project、Session 文件存储适配器
+  platform/                  Agent、Skill、Sandbox 与 Worktree 运行边界
+  index.mjs                  依赖组装与服务启动
+CONTEXT.md                   领域词汇
 ARCHITECTURE.md              架构说明
 USAGE.md                     使用说明
 ```

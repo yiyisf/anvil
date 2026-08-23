@@ -27,6 +27,24 @@ The upper layer therefore does **not** implement a skill marketplace or duplicat
 └──────────────────────────────────────────────────────────────┘
 ```
 
+## Source dependency direction
+
+BUILD 是唯一受支持的产品生命周期。项目不提供 v4 Requirement 的兼容或迁移能力；Project、Session、Agent、Sandbox 与 Worktree 作为共享模块保留。
+
+```text
+BUILD ──────► Platform / Persistence / HTTP
+```
+
+源码按该方向组织：
+
+- `server/build/`：BUILD 领域与用例；
+- `server/platform/`：Agent、Skill、Sandbox、Worktree；
+- `server/persistence/`：按领域分离的存储接口和共享 JSON 文件机制；
+- `server/http/`：HTTP/NDJSON 传输及路由注册；
+- `src/build/`、`src/shared/`：BUILD 界面与共享传输模块。
+
+外部 `/api/v5/*` 路径保持稳定；内部 BUILD 文件不再使用 `v5` 后缀。历史 `.data/reqs` 数据不再由应用读取，也不提供迁移流程。
+
 ## Adaptive BUILD flow
 
 Requirement clarification is interactive. The alignment agent uses `grill-with-docs`, inspects the project and asks only questions that matter to implementation. When the requirement is clear enough, the agent recommends an engineering shape. Anvil stores that recommendation and the user confirms the requirement before execution continues.
@@ -66,14 +84,16 @@ A route transition does not imply that Anvil must create a new conceptual method
 
 Current BUILD mapping:
 
-| Product purpose | Upstream skill |
-| --- | --- |
-| clarify requirement | `grill-with-docs` |
-| create implementation specification | `to-spec` |
-| decompose larger work | `to-tickets` |
-| implementation engineering | `implement` (+ its configured dependencies) |
+| Product purpose                     | Upstream skill                              |
+| ----------------------------------- | ------------------------------------------- |
+| clarify requirement                 | `grill-with-docs`                           |
+| create implementation specification | `to-spec`                                   |
+| decompose larger work               | `to-tickets`                                |
+| implementation engineering          | `implement` (+ its configured dependencies) |
 
 Other upstream skills such as `prototype`, `wayfinder`, `handoff`, `research`, `diagnosing-bugs`, `codebase-design` and `domain-modeling` remain capabilities to introduce at appropriate product scenarios rather than mandatory global stages.
+
+The canonical domain language is recorded in `CONTEXT.md`.
 
 ## Safety and execution boundary
 

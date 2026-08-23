@@ -68,7 +68,7 @@ npm run dev
 如遇到 worktree、命令桥接或 sandbox 工具问题，可运行：
 
 ```bash
-node --env-file=.env doctor.mjs [需求ID]
+node --env-file=.env doctor.mjs [WORK-<uuid>]
 ```
 
 ## 设计原则

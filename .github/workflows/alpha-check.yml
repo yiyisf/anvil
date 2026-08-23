@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [feat/v5-alpha-build-flow]
+    branches: [main]
 
 jobs:
   verify:
@@ -17,3 +17,28 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check:v5
+      - run: npm run test:e2e:api
+
+  browser-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e:ui
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=critical --registry=https://registry.npmjs.org

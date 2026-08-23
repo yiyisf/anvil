@@ -1,5 +1,5 @@
 {
-  "name": "v4-console",
+  "name": "anvil",
   "private": true,
   "type": "module",
   "engines": {
@@ -9,25 +9,34 @@
     "dev": "concurrently -n api,ui -c blue,green \"node --env-file=.env server/index.mjs\" \"vite\"",
     "api": "node --env-file=.env server/index.mjs",
     "ui": "vite",
-    "test:v5": "node --test server/v5-alpha.test.mjs server/build-core.e2e.test.mjs server/worktree.test.mjs",
+    "test:v5": "node --test server/build/build.test.mjs server/build/build-core.e2e.test.mjs server/platform/workspace-manager.test.mjs server/platform/doctor.test.mjs server/http/http.test.mjs src/build/model.test.js src/shared/api-client.test.js",
+    "test:e2e:api": "node --test --test-reporter=spec qa/e2e/api.e2e.test.mjs",
+    "test:e2e:ui": "node qa/e2e/run-ui-e2e.mjs",
+    "test:e2e:model": "node qa/e2e/model-smoke.mjs",
     "check:v5": "npm run test:v5 && vite build"
   },
   "dependencies": {
-    "@ai-sdk/harness": "1.0.39",
-    "@ai-sdk/harness-pi": "1.0.39",
-    "@ai-sdk/sandbox-just-bash": "1.0.39",
+    "@ai-sdk/harness": "1.0.85",
+    "@ai-sdk/harness-pi": "1.0.87",
+    "@ai-sdk/sandbox-just-bash": "1.0.85",
+    "cross-spawn": "^7.0.6",
     "just-bash": "^2.14.5",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
     "lucide-react": "^0.383.0",
-    "cross-spawn": "^7.0.6"
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "overrides": {
+    "brace-expansion": "5.0.9",
+    "protobufjs": "7.6.5",
+    "undici": "8.10.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.52.0",
     "@vitejs/plugin-react": "^4.3.1",
-    "vite": "^5.4.0",
-    "tailwindcss": "^3.4.10",
-    "postcss": "^8.4.41",
     "autoprefixer": "^10.4.20",
-    "concurrently": "^9.0.1"
+    "concurrently": "^9.0.1",
+    "postcss": "^8.4.41",
+    "tailwindcss": "^3.4.10",
+    "vite": "^5.4.0"
   }
 }

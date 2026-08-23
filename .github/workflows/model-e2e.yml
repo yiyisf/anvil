@@ -1,0 +1,31 @@
+name: model-e2e
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * *"
+
+jobs:
+  build-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        route: [direct, tickets]
+    env:
+      LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
+      LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+      PI_MODEL: ${{ secrets.PI_MODEL }}
+      PI_PROVIDER: ${{ vars.PI_PROVIDER || 'anthropic' }}
+      MODEL_E2E_ROUTE: ${{ matrix.route }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+          cache: npm
+      - run: npm ci
+      - name: Verify required model configuration
+        run: test -n "$LITELLM_BASE_URL" && test -n "$PI_MODEL"
+      - run: npm run test:e2e:model
