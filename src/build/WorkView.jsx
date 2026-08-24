@@ -53,26 +53,11 @@ function WorkProgress({ data }) {
   );
 }
 function RequirementUnderstanding({ activity }) {
-  const u = requirementUnderstanding(activity);
-  const Section = ({ title, items, empty }) => (
-    <div>
-      <div className="mb-2 text-xs font-medium text-slate-500">{title}</div>
-      {items.length ? (
-        <div className="space-y-2">
-          {items.map((item, i) => (
-            <div
-              key={i}
-              className="rounded-lg bg-slate-50 px-3 py-2 text-sm leading-5 text-slate-700"
-            >
-              {item}
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="text-xs leading-5 text-slate-400">{empty}</div>
-      )}
-    </div>
-  );
+  const understanding = requirementUnderstanding(activity);
+  const route = understanding.outcome?.route
+    ? ROUTE_TEXT[understanding.outcome.route] || understanding.outcome.route
+    : "";
+
   return (
     <aside className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="mb-4">
@@ -80,42 +65,172 @@ function RequirementUnderstanding({ activity }) {
           需求理解
         </div>
         <div className="mt-1 text-sm text-slate-600">
-          随着对话自动整理，不需要你维护工程文档。
+          自动保留问题背景、你的选择和最终执行结论。
         </div>
       </div>
       <div className="space-y-5">
-        <Section
-          title="已明确"
-          items={u.confirmed}
-          empty="你的回答会逐步沉淀在这里。"
-        />
-        <Section
-          title="仍待确认"
-          items={u.open}
-          empty={
-            activity?.status === "completed"
-              ? "当前没有待确认项。"
-              : "AI 检查项目后会提出关键问题。"
-          }
-        />
-        <Section
-          title="可能影响"
-          items={u.impact}
-          empty="识别到代码或模块影响后会显示在这里。"
-        />
+        <div>
+          <div className="mb-2 text-xs font-medium text-slate-500">需求概述</div>
+          <div className="rounded-lg bg-slate-50 px-3 py-2 text-sm leading-5 text-slate-700">
+            {understanding.overview || "等待需求描述。"}
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-2 text-xs font-medium text-slate-500">
+            已确认决策
+          </div>
+          {understanding.decisions.length ? (
+            <div className="space-y-2">
+              {understanding.decisions.map((decision, index) => (
+                <div
+                  key={index}
+                  className="rounded-lg border border-slate-100 px-3 py-2 text-sm leading-5"
+                >
+                  <div className="text-xs text-slate-400">问题</div>
+                  <div className="text-slate-600">{decision.question}</div>
+                  <div className="mt-2 text-xs text-slate-400">结论</div>
+                  <div className="font-medium text-slate-800">
+                    {decision.answer}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-xs leading-5 text-slate-400">
+              回答关键问题后会形成可追溯的决策记录。
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div className="mb-2 text-xs font-medium text-slate-500">
+            当前待确认
+          </div>
+          {understanding.open.length ? (
+            <div className="space-y-2">
+              {understanding.open.map((item, index) => (
+                <div
+                  key={index}
+                  className="rounded-lg bg-amber-50 px-3 py-2 text-sm leading-5 text-amber-900"
+                >
+                  {item}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-xs leading-5 text-slate-400">
+              当前没有待确认项。
+            </div>
+          )}
+        </div>
+
+        {understanding.outcome && (
+          <div>
+            <div className="mb-2 text-xs font-medium text-slate-500">
+              执行结论
+            </div>
+            <div className="rounded-lg bg-emerald-50 px-3 py-2 text-sm leading-5 text-emerald-900">
+              <div className="font-medium">{route}</div>
+              {understanding.outcome.reason && (
+                <div className="mt-1">{understanding.outcome.reason}</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div>
+          <div className="mb-2 text-xs font-medium text-slate-500">可能影响</div>
+          {understanding.impact.length ? (
+            <div className="space-y-2">
+              {understanding.impact.map((item, index) => (
+                <div
+                  key={index}
+                  className="rounded-lg bg-slate-50 px-3 py-2 text-sm leading-5 text-slate-700"
+                >
+                  {item}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-xs leading-5 text-slate-400">
+              识别到代码或模块影响后会显示在这里。
+            </div>
+          )}
+        </div>
       </div>
     </aside>
   );
 }
 function ConversationPanel({ activity, busy, live, onReply, onApprove }) {
   const [text, setText] = useState("");
+  const [optimisticMessages, setOptimisticMessages] = useState([]);
+  const scrollAnchorRef = useRef(null);
   const conversation = activity.conversation || [];
+  const messages = [...conversation, ...optimisticMessages];
+
+  useEffect(() => {
+    setOptimisticMessages([]);
+  }, [activity.id]);
+
+  useEffect(() => {
+    setOptimisticMessages((current) =>
+      current.filter((pending) => {
+        const serverCount = conversation.filter(
+          (message) =>
+            message.role === "user" &&
+            String(message.text).trim() === pending.text,
+        ).length;
+        return serverCount <= pending.serverCount;
+      }),
+    );
+  }, [conversation]);
+
+  useEffect(() => {
+    scrollAnchorRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "end",
+    });
+  }, [conversation.length, optimisticMessages.length, live]);
+
   const send = () => {
     const value = text.trim();
     if (!value || busy) return;
+    const pending = {
+      id: `local-${Date.now()}`,
+      role: "user",
+      text: value,
+      pending: true,
+      serverCount: conversation.filter(
+        (message) =>
+          message.role === "user" && String(message.text).trim() === value,
+      ).length,
+    };
+    setOptimisticMessages((current) => [...current, pending]);
     setText("");
-    onReply(value);
+    Promise.resolve(onReply(value))
+      .then((ok) => {
+        if (ok === false) {
+          setOptimisticMessages((current) =>
+            current.map((message) =>
+              message.id === pending.id
+                ? { ...message, pending: false, failed: true }
+                : message,
+            ),
+          );
+        }
+      })
+      .catch(() => {
+        setOptimisticMessages((current) =>
+          current.map((message) =>
+            message.id === pending.id
+              ? { ...message, pending: false, failed: true }
+              : message,
+          ),
+        );
+      });
   };
+
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
       <div className="border-b border-slate-100 px-5 py-4">
@@ -130,23 +245,35 @@ function ConversationPanel({ activity, busy, live, onReply, onApprove }) {
         </p>
       </div>
       <div className="max-h-[46vh] space-y-5 overflow-y-auto px-5 py-5">
-        {!conversation.length && !busy && (
+        {!messages.length && !busy && (
           <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">
             AI 会先检查项目，再向你确认真正影响实现的关键问题。
           </div>
         )}
-        {conversation.map((m, i) => (
+        {messages.map((message, index) => (
           <div
-            key={`${m.at || i}-${i}`}
-            className={m.role === "user" ? "ml-12" : "mr-12"}
+            key={message.id || `${message.at || index}-${index}`}
+            className={message.role === "user" ? "ml-12" : "mr-12"}
           >
-            <div className="mb-1 text-xs text-slate-400">
-              {m.role === "user" ? "你" : "AI"}
+            <div
+              className={`mb-1 text-xs ${message.failed ? "text-red-500" : "text-slate-400"}`}
+            >
+              {message.role === "user" ? "你" : "AI"}
+              {message.pending ? " · 已发送" : ""}
+              {message.failed ? " · 发送失败" : ""}
             </div>
             <div
-              className={`whitespace-pre-wrap leading-6 ${m.role === "user" ? "rounded-lg bg-slate-100 px-3 py-2" : "text-slate-800"}`}
+              className={`whitespace-pre-wrap leading-6 ${
+                message.role === "user"
+                  ? `rounded-lg px-3 py-2 ${
+                      message.failed
+                        ? "bg-red-50 text-red-700"
+                        : "bg-slate-100"
+                    }`
+                  : "text-slate-800"
+              }`}
             >
-              {m.text}
+              {message.text}
             </div>
           </div>
         ))}
@@ -158,15 +285,16 @@ function ConversationPanel({ activity, busy, live, onReply, onApprove }) {
             </div>
           </div>
         )}
+        <div ref={scrollAnchorRef} />
       </div>
       {activity.status === "waiting_user" && (
         <div className="border-t border-slate-100 p-4">
           <textarea
             value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
                 send();
               }
             }}
