@@ -172,8 +172,15 @@ async function advanceBuildUnlocked({
       await prepareImplementation({ work, project });
       frontier = await getTicketFrontier({ work, project });
       if (frontier.counts.total === 0) {
+        // Keep the approved Planning activity resumable. This also repairs
+        // BUILDs that an older release incorrectly marked completed before
+        // /to-tickets had published its files.
+        planning.status = "idle";
+        planning.finishedAt = null;
+        if (planning.gate) planning.gate.status = "approved";
+        await saveActivity(planning);
         throw new Error(
-          "方案已确认，但 /to-tickets 没有发布任何开发任务。请重试方案发布，并检查 docs/agents/issue-tracker.md 配置。",
+          "方案已确认，但 /to-tickets 没有发布任何开发任务。请点击“重试推进”，并检查 docs/agents/issue-tracker.md 配置。",
         );
       }
     }
