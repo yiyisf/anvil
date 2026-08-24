@@ -16,15 +16,18 @@ test("BUILD phase projection follows completed planning", () => {
 });
 
 test("requirement understanding projects user answers and latest open question", () => {
-  const understanding = requirementUnderstanding({
-    status: "waiting_user",
-    conversation: [
-      { role: "assistant", text: "目标用户是谁？" },
-      { role: "user", text: "内部工程师" },
-      { role: "assistant", text: "是否需要保留旧接口？" },
-    ],
-    technical: { files: ["src/app/App.jsx"] },
-  }, "修复旧接口兼容");
+  const understanding = requirementUnderstanding(
+    {
+      status: "waiting_user",
+      conversation: [
+        { role: "assistant", text: "目标用户是谁？" },
+        { role: "user", text: "内部工程师" },
+        { role: "assistant", text: "是否需要保留旧接口？" },
+      ],
+      technical: { files: ["src/app/App.jsx"] },
+    },
+    "修复旧接口兼容",
+  );
   assert.equal(understanding.overview, "修复旧接口兼容");
   assert.deepEqual(understanding.confirmed, ["内部工程师"]);
   assert.deepEqual(understanding.decisions, [
@@ -33,7 +36,6 @@ test("requirement understanding projects user answers and latest open question",
   assert.deepEqual(understanding.open, ["是否需要保留旧接口？"]);
   assert.deepEqual(understanding.impact, ["src/app/App.jsx"]);
 });
-
 
 test("requirement understanding exposes the selected execution outcome", () => {
   const understanding = requirementUnderstanding({
