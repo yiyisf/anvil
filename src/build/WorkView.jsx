@@ -52,8 +52,8 @@ function WorkProgress({ data }) {
     </div>
   );
 }
-function RequirementUnderstanding({ activity }) {
-  const understanding = requirementUnderstanding(activity);
+function RequirementUnderstanding({ activity, overview }) {
+  const understanding = requirementUnderstanding(activity, overview);
   const route = understanding.outcome?.route
     ? ROUTE_TEXT[understanding.outcome.route] || understanding.outcome.route
     : "";
@@ -577,7 +577,10 @@ export default function WorkView({ workId, apiBase = "" }) {
             onReply={reply}
             onApprove={() => decide(alignment, "approve")}
           />
-          <RequirementUnderstanding activity={alignment} />
+          <RequirementUnderstanding
+            activity={alignment}
+            overview={data.work.title}
+          />
         </div>
       ) : gate ? (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-5">
