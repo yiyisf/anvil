@@ -225,6 +225,22 @@ async function advanceBuildUnlocked({
         prompt: next.activity.type === "alignment" ? work.title : "",
         onEvent,
       });
+      if (next.activity.type === "alignment") {
+        const alignedWork = await getWork(workId);
+        const alignedActivity = await getActivity(next.activity.id);
+        if (
+          alignedActivity?.status === "completed" &&
+          alignedWork?.buildRoute
+        ) {
+          onEvent?.({
+            type: "route_selected",
+            route: alignedWork.buildRoute,
+            reason: alignedActivity.alignmentDecision?.reason || "",
+            confidence:
+              alignedActivity.alignmentDecision?.confidence ?? null,
+          });
+        }
+      }
       continue;
     }
     if (next.kind === "ticket") {
