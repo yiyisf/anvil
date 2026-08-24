@@ -20,6 +20,11 @@ const STATUS_TEXT = {
   ready: "可开始",
   blocked: "等待依赖",
 };
+const ROUTE_TEXT = {
+  direct: "直接开发",
+  spec: "先制定方案",
+  tickets: "拆分开发任务",
+};
 function WorkProgress({ data }) {
   return (
     <div className="grid grid-cols-4 gap-2 rounded-xl border border-slate-200 bg-white p-3">
@@ -174,13 +179,13 @@ function ConversationPanel({ activity, busy, live, onReply, onApprove }) {
               Enter 发送 · Shift+Enter 换行
             </span>
             <div className="flex gap-2">
-              {!!conversation.length && (
+              {!!conversation.length && activity.gate?.required && (
                 <button
                   disabled={busy}
                   onClick={onApprove}
                   className="rounded-md border border-slate-200 px-3 py-1.5 text-xs text-slate-600 disabled:opacity-40"
                 >
-                  需求已清楚，确认
+                  确认风险并继续
                 </button>
               )}
               <button
@@ -354,6 +359,16 @@ export default function WorkView({ workId, apiBase = "" }) {
           <h1 className="mt-1 text-xl font-semibold text-slate-900">
             {data.work.title}
           </h1>
+          {data.work.buildRoute && (
+            <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+              <span className="rounded-full bg-slate-100 px-2 py-1 font-medium text-slate-700">
+                {ROUTE_TEXT[data.work.buildRoute] || data.work.buildRoute}
+              </span>
+              {alignment?.alignmentDecision?.reason && (
+                <span>{alignment.alignmentDecision.reason}</span>
+              )}
+            </div>
+          )}
         </div>
         <button
           className="rounded-md border border-slate-200 px-3 py-1.5 text-xs text-slate-600"
