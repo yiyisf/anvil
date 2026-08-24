@@ -155,6 +155,7 @@ test("concurrent advances share one Alignment execution", async (t) => {
 test("Fake Agent completes the direct BUILD route without redundant approval", async (t) => {
   const context = await setup(t, "Direct route");
   let turns = 0;
+  const events = [];
   const runner = context.createActivityRunner({
     executeTurn: async () => {
       turns += 1;
@@ -175,6 +176,7 @@ test("Fake Agent completes the direct BUILD route without redundant approval", a
     project: context.project,
     activityRunner: runner.runActivity,
     continueSession: runner.continueActivitySession,
+    onEvent: (event) => events.push(event),
   });
 
   const completed = await context.store.getWork(context.work.id);
@@ -184,6 +186,10 @@ test("Fake Agent completes the direct BUILD route without redundant approval", a
   assert.equal(result.reason, "completed");
   assert.equal(completed.status, "completed");
   assert.equal(completed.buildRoute, "direct");
+  assert.deepEqual(
+    events.filter((event) => event.type === "route_selected").map((event) => event.route),
+    ["direct"],
+  );
   assert.equal(turns, 2);
   assert.equal(alignment.gate, null);
 })
