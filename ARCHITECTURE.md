@@ -47,7 +47,7 @@ BUILD ──────► Platform / Persistence / HTTP
 
 ## Adaptive BUILD flow
 
-Requirement clarification is interactive. The alignment agent uses `grill-with-docs`, inspects the project and asks only questions that matter to implementation. When the requirement is clear enough, the agent recommends an engineering shape. Anvil stores that recommendation and the user confirms the requirement before execution continues.
+Requirement clarification is interactive. The Alignment Agent uses `grill-with-docs`, inspects the project and asks only questions that matter to implementation. Every turn ends with a structured `ANVIL_DECISION` outcome. `needs_input` keeps the natural-language conversation open; `ready` selects `direct`, `spec` or `tickets`. Low-risk ready decisions advance immediately. High-risk, irreversible, destructive, security-sensitive, external-system or scope-expanding decisions create a dynamic human Gate.
 
 ```text
 /grill-with-docs
@@ -65,7 +65,7 @@ The routes mean:
 - **spec** — the work benefits from a durable implementation specification, but decomposition into tickets would add ceremony without execution value.
 - **tickets** — decomposition is genuinely useful, for example because of multiple independent/dependent units of work or a larger execution surface.
 
-If the alignment agent does not provide a valid recommendation, Anvil currently falls back to the conservative `tickets` route rather than guessing that a complex task is small.
+A missing or invalid structured decision is a recoverable protocol error. It never defaults to `tickets`: protocol failure must not silently choose the most expensive execution route. The `tickets` route is valid only when the Agent explicitly identifies useful decomposition. Planning publishes local tickets automatically; it does not add a generic approval round.
 
 ## Session continuity
 
@@ -77,7 +77,7 @@ A route transition does not imply that Anvil must create a new conceptual method
 - **Activity** — a meaningful engineering interaction such as alignment, specification, planning or implementation. It may reference an upstream skill and an Agent Session.
 - **AgentSession** — coding-agent conversational/execution context.
 - **SkillRun** — one observable skill/session execution record.
-- **Gate** — explicit human decision point. Requirement approval is the key transition from clarification to execution.
+- **Gate** — an explicit human decision created only when risk or an unresolved consequential choice requires it. It is not a mandatory stage boundary.
 - **Ticket** — only required by the `tickets` route.
 
 ## Skill boundary
@@ -105,8 +105,8 @@ Implemented in the current alpha BUILD path:
 
 - interactive requirement clarification and reply API;
 - requirement-understanding UI projection;
-- agent-generated adaptive route recommendation;
-- human approval before route adoption;
+- structured Alignment decisions with explicit readiness, route, confidence and risk;
+- automatic low-risk route adoption and dynamic high-risk approval;
 - `direct`, `spec`, and `tickets` orchestration paths;
 - same-session direct implementation;
 - specification-context implementation without forced tickets;
