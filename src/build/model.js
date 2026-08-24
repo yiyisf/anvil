@@ -26,24 +26,43 @@ export function phaseState(type, data) {
 
 export function requirementUnderstanding(activity) {
   const conversation = activity?.conversation || [];
-  const userMessages = conversation
-    .filter((message) => message.role === "user")
-    .map((message) => message.text.trim())
-    .filter(Boolean);
-  const agentMessages = conversation
-    .filter((message) => message.role !== "user")
-    .map((message) => message.text.trim())
-    .filter(Boolean);
-  const latestQuestion = [...agentMessages]
-    .reverse()
-    .find((text) => /[?？]|确认|需要|是否|哪|什么|如何|范围|边界/.test(text));
+  const userMessages = [];
+  const decisions = [];
+  let latestAgentMessage = null;
+  let unansweredQuestion = null;
 
+  for (const message of conversation) {
+    const text = String(message.text || "").trim();
+    if (!text) continue;
+    if (message.role === "user") {
+      userMessages.push(text);
+      if (latestAgentMessage)
+        decisions.push({ question: latestAgentMessage, answer: text });
+      unansweredQuestion = null;
+    } else {
+      latestAgentMessage = text;
+      unansweredQuestion = text;
+    }
+  }
+
+  const decision = activity?.alignmentDecision || null;
   return {
+    overview: userMessages[0] || "",
+    // Retained for callers that only need a compact list of confirmed inputs.
     confirmed: userMessages.slice(-4),
+    decisions: decisions.slice(-6),
     open:
-      activity?.status === "waiting_user" && latestQuestion
-        ? [latestQuestion]
+      activity?.status === "waiting_user" && unansweredQuestion
+        ? [unansweredQuestion]
         : [],
+    outcome:
+      decision?.status === "ready"
+        ? {
+            route: decision.route,
+            reason: decision.reason || "",
+            risk: decision.risk || "medium",
+          }
+        : null,
     impact: activity?.technical?.files || activity?.technical?.areas || [],
   };
 }
