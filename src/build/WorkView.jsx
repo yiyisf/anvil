@@ -260,7 +260,8 @@ export default function WorkView({ workId, apiBase = "" }) {
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [live, setLive] = useState(""),
-    [stage, setStage] = useState("");
+    [stage, setStage] = useState(""),
+    [routeDecision, setRouteDecision] = useState(null);
   const refresh = useCallback(async () => {
     if (!workId) return;
     const [work, frontier] = await Promise.all([
@@ -271,6 +272,7 @@ export default function WorkView({ workId, apiBase = "" }) {
     setTickets(frontier);
   }, [workId, api]);
   useEffect(() => {
+    setRouteDecision(null);
     refresh().catch((e) => setError(e.message));
   }, [refresh]);
   const alignment = useMemo(
@@ -286,6 +288,12 @@ export default function WorkView({ workId, apiBase = "" }) {
       await api.stream(url.replace(apiBase, ""), body, (e) => {
         if (e.type === "text") setLive((s) => s + e.text);
         if (e.type === "orchestrator") setStage(e.state);
+        if (e.type === "route_selected")
+          setRouteDecision({
+            route: e.route,
+            reason: e.reason || "",
+            confidence: e.confidence,
+          });
       });
       await refresh();
       return true;
@@ -348,7 +356,16 @@ export default function WorkView({ workId, apiBase = "" }) {
     gateOptions = gate?.gate?.options || [
       { action: "approve", label: "确认并继续" },
       { action: "revise", label: "需要调整" },
-    ];
+    ],
+    selectedRoute =
+      routeDecision ||
+      (data.work.buildRoute
+        ? {
+            route: data.work.buildRoute,
+            reason: alignment?.alignmentDecision?.reason || "",
+            confidence: alignment?.alignmentDecision?.confidence ?? null,
+          }
+        : null);
   return (
     <section className="mx-auto max-w-6xl space-y-4 p-5">
       <header className="flex items-start justify-between gap-4">
@@ -359,13 +376,13 @@ export default function WorkView({ workId, apiBase = "" }) {
           <h1 className="mt-1 text-xl font-semibold text-slate-900">
             {data.work.title}
           </h1>
-          {data.work.buildRoute && (
+          {selectedRoute && (
             <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
               <span className="rounded-full bg-slate-100 px-2 py-1 font-medium text-slate-700">
-                {ROUTE_TEXT[data.work.buildRoute] || data.work.buildRoute}
+                {ROUTE_TEXT[selectedRoute.route] || selectedRoute.route}
               </span>
-              {alignment?.alignmentDecision?.reason && (
-                <span>{alignment.alignmentDecision.reason}</span>
+              {selectedRoute.reason && (
+                <span>{selectedRoute.reason}</span>
               )}
             </div>
           )}
@@ -378,6 +395,18 @@ export default function WorkView({ workId, apiBase = "" }) {
         </button>
       </header>
       <WorkProgress data={data} />
+      {selectedRoute && (
+        <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+          <div className="text-xs font-medium text-blue-700">执行方式已自动选择</div>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-700">
+            <span className="font-semibold">
+              {ROUTE_TEXT[selectedRoute.route] || selectedRoute.route}
+            </span>
+            {selectedRoute.reason && <span>· {selectedRoute.reason}</span>}
+            {busy && <span className="text-blue-600">· 正在进入执行</span>}
+          </div>
+        </div>
+      )}
       {recovering && (
         <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
           <div className="text-xs font-medium text-blue-700">
