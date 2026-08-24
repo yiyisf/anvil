@@ -66,8 +66,16 @@ export function workspaceKey(reqId) {
     tail || crypto.createHash("sha256").update(raw).digest("hex").slice(0, 10)
   );
 }
+export function workspaceBinding(worktreesDir, reqId) {
+  const workDir = workspaceKey(reqId);
+  return {
+    workDir,
+    projectDir: path.join(worktreesDir, workDir),
+  };
+}
+
 export const treePath = (project, reqId) =>
-  path.join(project.worktreesDir, workspaceKey(reqId));
+  workspaceBinding(project.worktreesDir, reqId).projectDir;
 const branchOf = (reqId) => `agent/${workspaceKey(reqId)}`;
 const LF_CHECKOUT = ["-c", "core.autocrlf=false", "-c", "core.eol=lf"];
 
