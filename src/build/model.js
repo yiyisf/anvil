@@ -24,7 +24,7 @@ export function phaseState(type, data) {
     : "todo";
 }
 
-export function requirementUnderstanding(activity) {
+export function requirementUnderstanding(activity, overview = "") {
   const conversation = activity?.conversation || [];
   const userMessages = [];
   const decisions = [];
@@ -47,7 +47,7 @@ export function requirementUnderstanding(activity) {
 
   const decision = activity?.alignmentDecision || null;
   return {
-    overview: userMessages[0] || "",
+    overview: overview || userMessages[0] || "",
     // Retained for callers that only need a compact list of confirmed inputs.
     confirmed: userMessages.slice(-4),
     decisions: decisions.slice(-6),
