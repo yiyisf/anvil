@@ -12,6 +12,10 @@ import {
 import { decideNextBuildStep } from "./orchestrator.mjs";
 import { continuationPrompt } from "./session-lifecycle.mjs";
 import { recoveryDecision } from "./recovery-policy.mjs";
+import {
+  dynamicApprovalGate,
+  parseAlignmentDecision,
+} from "./decision-protocol.mjs";
 
 test("BUILD flow uses Matt native skill chain", () => {
   assert.deepEqual(
@@ -20,24 +24,44 @@ test("BUILD flow uses Matt native skill chain", () => {
   );
 });
 
-test("BUILD only gates alignment and planning", () => {
+test("BUILD starts without fixed approval gates", () => {
   const activities = createBuildActivities("W-1");
   assert.equal(
-    activities.find((x) => x.type === "alignment").gate.kind,
-    "approval",
+    activities.every((activity) => activity.gate === null),
+    true,
   );
-  assert.equal(activities.find((x) => x.type === "specification").gate, null);
-  assert.equal(
-    activities.find((x) => x.type === "planning").gate.kind,
-    "approval",
+});
+
+test("Alignment protocol selects a route without leaking its marker", () => {
+  const parsed = parseAlignmentDecision(
+    '需求明确，可以直接开始。\nANVIL_DECISION: {"status":"ready","route":"direct","confidence":0.94,"reason":"局部修改","risk":"low","requiresApproval":false,"question":""}',
   );
+  assert.equal(parsed.error, null);
+  assert.equal(parsed.clean, "需求明确，可以直接开始。");
+  assert.equal(parsed.decision.route, "direct");
+  assert.equal(dynamicApprovalGate(parsed.decision), null);
+});
+
+test("high-risk Alignment decisions create a dynamic approval gate", () => {
+  const parsed = parseAlignmentDecision(
+    '涉及不可逆数据迁移。\nANVIL_DECISION: {"status":"ready","route":"spec","confidence":0.8,"reason":"不可逆迁移","risk":"high","requiresApproval":false,"question":""}',
+  );
+  const gate = dynamicApprovalGate(parsed.decision);
+  assert.equal(gate.status, "waiting");
+  assert.match(gate.prompt, /不可逆迁移/);
+});
+
+test("missing Alignment decision never defaults to tickets", () => {
+  const parsed = parseAlignmentDecision("需求已经清楚。");
+  assert.equal(parsed.decision, null);
+  assert.match(parsed.error, /缺少 ANVIL_DECISION/);
 });
 
 test("orchestrator stops at human gate instead of running ahead", () => {
   const activities = createBuildActivities("W-1");
   activities[0].status = "waiting_user";
   assert.equal(
-    decideNextBuildStep({ work: { id: "W-1" }, activities }).kind,
+    decideNextBuildStep({ work: { id: "W-1", buildRoute: null }, activities }).kind,
     "gate",
   );
 });
@@ -46,7 +70,10 @@ test("orchestrator automatically advances non-gated specification", () => {
   const activities = createBuildActivities("W-1");
   activities[0].status = "completed";
   assert.deepEqual(
-    decideNextBuildStep({ work: { id: "W-1" }, activities }).activity.type,
+    decideNextBuildStep({
+      work: { id: "W-1", buildRoute: "tickets" },
+      activities,
+    }).activity.type,
     "specification",
   );
 });
