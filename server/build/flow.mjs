@@ -6,10 +6,6 @@ export const BUILD_ACTIVITY_DEFINITIONS = Object.freeze([
     type: "alignment",
     label: "确认需求",
     skill: BUILD_SKILLS.alignment,
-    gate: {
-      kind: "approval",
-      prompt: "需求边界是否已经明确，可以进入方案设计？",
-    },
   },
   {
     type: "specification",
@@ -20,7 +16,6 @@ export const BUILD_ACTIVITY_DEFINITIONS = Object.freeze([
     type: "planning",
     label: "拆分开发任务",
     skill: BUILD_SKILLS.planning,
-    gate: { kind: "approval", prompt: "开发计划和任务拆分是否可以开始执行？" },
   },
 ]);
 
