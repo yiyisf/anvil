@@ -245,7 +245,7 @@ test("Fake Agent completes dependency-ordered Ticket BUILD route", async (t) => 
   const runner = context.createActivityRunner({
     executeTurn: async ({ prompt }) => {
       turns += 1;
-      if (prompt.startsWith("/to-tickets")) {
+      if (prompt.startsWith("ANVIL_PLANNING_APPROVED:")) {
         const issues = path.join(context.worktree, ".scratch", "qa", "issues");
         await fs.mkdir(issues, { recursive: true });
         await fs.writeFile(
@@ -294,6 +294,16 @@ test("Fake Agent completes dependency-ordered Ticket BUILD route", async (t) => 
     activityRunner: runner.runActivity,
   });
   assert.equal(planningGate.reason, "gate");
+  assert.equal(
+    (
+      await context.getTicketFrontier({
+        work: await context.store.getWork(context.work.id),
+        project: context.project,
+      })
+    ).counts.total,
+    0,
+    "the initial planning turn must wait for approval before publishing tickets",
+  );
   const planning = (await context.store.listActivities(context.work.id)).find(
     (activity) => activity.type === "planning",
   );
@@ -307,6 +317,7 @@ test("Fake Agent completes dependency-ordered Ticket BUILD route", async (t) => 
     workId: context.work.id,
     project: context.project,
     activityRunner: runner.runActivity,
+    continueSession: runner.continueActivitySession,
     ticketRunner: async ({ workId, ticketId }) => {
       executedTickets.push(ticketId);
       const implementation = (await context.store.listActivities(workId)).find(
@@ -322,7 +333,7 @@ test("Fake Agent completes dependency-ordered Ticket BUILD route", async (t) => 
     "completed",
   );
   assert.deepEqual(executedTickets, ["01", "02"]);
-  assert.equal(turns, 3);
+  assert.equal(turns, 4);
 });
 
 test("adaptive BUILD chooses direct implementation after alignment", async (t) => {
