@@ -382,15 +382,16 @@ export default function WorkView({ workId, apiBase = "" }) {
       {error && (
         <div className="flex items-center justify-between gap-3 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">
           <span>{error}</span>
-          {data.work.status === "draft" && (
+          {!["completed", "cancelled"].includes(data.work.status) && (
             <button
               className="rounded border border-red-300 bg-white px-2.5 py-1 text-xs"
               onClick={() => {
-                autoStartedWorkIds.current.delete(data.work.id);
+                if (data.work.status === "draft")
+                  autoStartedWorkIds.current.delete(data.work.id);
                 advance();
               }}
             >
-              重试
+              重试推进
             </button>
           )}
         </div>
