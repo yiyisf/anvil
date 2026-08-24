@@ -19,7 +19,9 @@ const ROUTE_ORDER = Object.freeze({
   tickets: ["alignment", "specification", "planning"],
 });
 export function buildOrder(work) {
-  return ROUTE_ORDER[work.buildRoute] || ROUTE_ORDER.tickets;
+  // An absent route means Alignment has not produced a valid decision yet.
+  // Never turn protocol failure into the most expensive execution route.
+  return ROUTE_ORDER[work.buildRoute] || ["alignment"];
 }
 export function decideNextBuildStep({ work, activities, frontier = null }) {
   const ordered = buildOrder(work)
@@ -107,20 +109,16 @@ export async function decideHumanGate({
     await saveWork(work);
     return { work, activity };
   }
-  if (activity.type === "alignment" && decision === "approve")
-    setBuildRoute(
-      work,
-      route || activity.routeRecommendation?.route || "tickets",
-    );
+  if (activity.type === "alignment" && decision === "approve") {
+    const selectedRoute =
+      route || activity.routeRecommendation?.route || work.buildRoute;
+    if (!selectedRoute)
+      throw new Error("Alignment 尚未产生有效执行路线，不能确认继续");
+    setBuildRoute(work, selectedRoute);
+  }
   activity.gate.status =
     decision === "approve" ? "approved" : "revision_requested";
-  // Planning approval is input to the still-running /to-tickets workflow.
-  // Do not mark it completed until that same Agent Session has published
-  // the approved tickets to the configured tracker.
-  const resumesApprovedPlanning =
-    activity.type === "planning" && decision === "approve";
-  activity.status =
-    decision === "approve" && !resumesApprovedPlanning ? "completed" : "idle";
+  activity.status = decision === "approve" ? "completed" : "idle";
   work.status = decision === "approve" ? "active" : "waiting_user";
   await saveActivity(activity);
   await saveWork(work);
@@ -220,25 +218,6 @@ async function advanceBuildUnlocked({
     }
     if (next.kind === "prepare_implementation") continue;
     if (next.kind === "activity") {
-      if (
-        next.activity.type === "planning" &&
-        next.activity.gate?.status === "approved"
-      ) {
-        await continueSession({
-          workId,
-          activityId: next.activity.id,
-          project,
-          phase: "spec",
-          prompt:
-            "ANVIL_PLANNING_APPROVED: The user approved the proposed ticket breakdown. Continue the existing /to-tickets workflow now. Publish the approved tickets to the configured local tracker under .scratch/<feature-slug>/issues/, one Markdown file per ticket. Do not ask for approval again.",
-          onEvent,
-        });
-        const completedPlanning = await getActivity(next.activity.id);
-        completedPlanning.status = "completed";
-        completedPlanning.finishedAt = new Date().toISOString();
-        await saveActivity(completedPlanning);
-        continue;
-      }
       await activityRunner({
         workId,
         activityId: next.activity.id,
