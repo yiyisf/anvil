@@ -14,6 +14,7 @@ import {
 import { posixVirtualFs } from "./sandbox-path.mjs";
 import { mapStreamPart } from "./stream-map.mjs";
 import { environmentHint } from "./environment-hint.mjs";
+import { workspaceBinding } from "./workspace-manager.mjs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -88,6 +89,7 @@ async function buildAgent({
   restore,
   phase = "impl",
 }) {
+  const { workDir, projectDir } = workspaceBinding(worktreesDir, reqId);
   const raw = await Sandbox.create({
     // ⚠️ posixVirtualFs：Windows 上 ReadWriteFs 会把宿主路径切出反斜杠形式的"虚拟路径"
     //    （\workspace\src\a.js），pi 用 path.posix 校验会判成越界工作区。详见 sandbox-path.mjs
@@ -96,11 +98,7 @@ async function buildAgent({
     useDefaultLayout: false,
   });
   // 从该需求的 worktree 读 agent.config.json（随仓库带入），实现按项目白名单
-  const toolCfg = registerTools(
-    raw,
-    worktreesDir,
-    path.join(worktreesDir, reqId),
-  );
+  const toolCfg = registerTools(raw, worktreesDir, projectDir);
   // 常驻日志：桥接结果一眼可见，避免"配了却没生效"这类问题排查困难
   console.log(
     `[tools] ${reqId}/${phase} sandbox=[${toolCfg.tools.join(",")}] 来源=${toolCfg.source}`,
@@ -109,7 +107,7 @@ async function buildAgent({
   const sandbox = wrapResumable(createJustBashSandbox({ sandbox: raw }));
 
   // Agent 工具层：按阶段限定 LLM 能调用哪些工具（与 sandbox 环境依赖是两层）
-  const toolSettings = agentToolSettings(phase, path.join(worktreesDir, reqId));
+  const toolSettings = agentToolSettings(phase, projectDir);
   console.log(
     `[tools] ${reqId}/${phase} agent=[${toolSettings.builtinToolFiltering?.toolNames?.join(",") || "全部内建工具"}]`,
   );
@@ -125,7 +123,7 @@ async function buildAgent({
     ...toolSettings,
     ...(skills?.length ? { skills } : {}),
     sandboxConfig: {
-      workDir: reqId, // → sessionWorkDir = /<reqId> ↔ 真实 <WORKTREES_DIR>/<reqId>
+      workDir, // → sessionWorkDir = /<workspaceKey> ↔ 真正的 Git worktree
       onSession: async ({ session, sessionWorkDir }) => {
         // ⚠️ just-bash 的 run() 不注入 env，框架的 mkdir -p "$WORK_DIR" 会展开成空 → 必须字面量
         await session.run({ command: `mkdir -p ${shq(sessionWorkDir)}` });
