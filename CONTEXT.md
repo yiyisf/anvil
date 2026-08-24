@@ -17,8 +17,8 @@ Work 中一次有明确工程目的的交互，例如需求澄清、方案制定
 _Avoid_: Step, Stage, Task
 
 **Gate**:
-Work 推进过程中必须由人作出明确决定的位置。
-_Avoid_: Activity, Approval Step
+仅在高风险、不可逆或存在重要未决选择时动态创建的人类决策点，不是固定阶段。
+_Avoid_: Activity, Approval Step, Mandatory Stage
 
 **Agent Session**:
 Coding Agent 在一次或连续多次 Activity 执行中保持的对话与执行上下文。
@@ -33,5 +33,5 @@ _Avoid_: Agent Session, Activity
 _Avoid_: Work, Activity
 
 **Build Route**:
-根据工作复杂度选择的工程形态：直接开发、先形成方案，或拆分开发任务。
-_Avoid_: Fixed Pipeline, Workflow
+Alignment 在需求明确后结构化选择的工程形态：直接开发、先形成方案，或拆分开发任务。协议失败不得默认选择任一路线。
+_Avoid_: Fixed Pipeline, Workflow, Fallback Route
