@@ -1,5 +1,12 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Check, ChevronsUpDown, FolderGit2, Plus } from "lucide-react";
+import {
+  Check,
+  ChevronsUpDown,
+  FolderGit2,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+} from "lucide-react";
 import WorkView from "../build/WorkView.jsx";
 import { postJson, readJsonResponse } from "../shared/api-client.js";
 
@@ -36,6 +43,7 @@ export default function App() {
   const [showAllProjects, setShowAllProjects] = useState(false);
   const [activeWorkId, setActiveWorkId] = useState(workIdFromUrl);
   const [appError, setAppError] = useState("");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const refreshWorks = useCallback(async () => {
     setWorks(await api.works.list(showAllProjects ? null : activeProjectId));
@@ -73,6 +81,7 @@ export default function App() {
       const created = await api.works.create(title, activeProjectId);
       await refreshWorks();
       setActiveWorkId(created.work.id);
+      setSidebarCollapsed(true);
     } catch (error) {
       setAppError(error.message);
     }
@@ -95,6 +104,8 @@ export default function App() {
         onToggleShowAll={() => setShowAllProjects((value) => !value)}
         onCreateProject={createProject}
         onCreateWork={createWork}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed((value) => !value)}
       />
       <main className="flex min-w-0 flex-1 flex-col">
         {appError && (
@@ -125,6 +136,8 @@ function Sidebar({
   onToggleShowAll,
   onCreateProject,
   onCreateWork,
+  collapsed,
+  onToggleCollapse,
 }) {
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
@@ -136,6 +149,20 @@ function Sidebar({
     onCreateWork(title.trim());
     setTitle("");
     setAdding(false);
+  }
+
+  if (collapsed) {
+    return (
+      <aside className="flex w-12 shrink-0 flex-col items-center border-r border-neutral-200 py-2">
+        <button
+          onClick={onToggleCollapse}
+          className="rounded p-2 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
+          title="展开侧边栏"
+        >
+          <PanelLeftOpen className="h-4 w-4" />
+        </button>
+      </aside>
+    );
   }
 
   return (
@@ -150,6 +177,13 @@ function Sidebar({
             {activeProject?.name || "选择项目"}
           </span>
           <ChevronsUpDown className="h-3 w-3 shrink-0 text-neutral-400" />
+        </button>
+        <button
+          onClick={onToggleCollapse}
+          className="ml-1 shrink-0 rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
+          title="收起侧边栏"
+        >
+          <PanelLeftClose className="h-4 w-4" />
         </button>
         <button
           onClick={() => setAdding(true)}
