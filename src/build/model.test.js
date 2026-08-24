@@ -24,8 +24,8 @@ test("requirement understanding projects user answers and latest open question",
       { role: "assistant", text: "是否需要保留旧接口？" },
     ],
     technical: { files: ["src/app/App.jsx"] },
-  });
-  assert.equal(understanding.overview, "内部工程师");
+  }, "修复旧接口兼容");
+  assert.equal(understanding.overview, "修复旧接口兼容");
   assert.deepEqual(understanding.confirmed, ["内部工程师"]);
   assert.deepEqual(understanding.decisions, [
     { question: "目标用户是谁？", answer: "内部工程师" },
