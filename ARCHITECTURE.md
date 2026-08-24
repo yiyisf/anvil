@@ -47,7 +47,7 @@ BUILD ──────► Platform / Persistence / HTTP
 
 ## Adaptive BUILD flow
 
-Requirement clarification is interactive. The Alignment Agent uses `grill-with-docs`, inspects the project and asks only questions that matter to implementation. Every turn ends with a structured `ANVIL_DECISION` outcome. `needs_input` keeps the natural-language conversation open; `ready` selects `direct`, `spec` or `tickets`. Low-risk ready decisions advance immediately. High-risk, irreversible, destructive, security-sensitive, external-system or scope-expanding decisions create a dynamic human Gate.
+Requirement clarification is interactive. The Alignment Agent uses `grill-with-docs`, inspects the project and asks only questions that matter to implementation. Every turn ends with a structured `ANVIL_DECISION` outcome. `needs_input` keeps the natural-language conversation open; `ready` selects `direct`, `spec` or `tickets`. Low-risk ready decisions emit a `route_selected` event, making the selected route and reason visible before execution continues in the same stream. High-risk, irreversible, destructive, security-sensitive, external-system or scope-expanding decisions create a dynamic human Gate.
 
 ```text
 /grill-with-docs
