@@ -3,7 +3,11 @@ import {
   buildSkillInvocation,
   loadMattSkillBundle,
 } from "../platform/skill-adapter.mjs";
-import { newAgentSession, newSkillRun, BUILD_ROUTES } from "./domain.mjs";
+import { newAgentSession, newSkillRun, setBuildRoute } from "./domain.mjs";
+import {
+  dynamicApprovalGate,
+  parseAlignmentDecision,
+} from "./decision-protocol.mjs";
 import {
   getActivity,
   saveActivity,
@@ -21,13 +25,16 @@ const ACTIVITY_PHASE = {
   implementation: "impl",
   recovery: "impl",
 };
-const ROUTE_MARKER = /ANVIL_ROUTE:\s*(\{[^\n]+\})\s*$/m;
 function instructionsFor(activity) {
-  const route =
-    activity.type === "alignment"
-      ? ` When the requirement is clear enough to recommend the next engineering shape, append exactly one single-line marker: ANVIL_ROUTE: {"route":"direct|spec|tickets","reason":"brief reason"}. Choose direct when this should stay in one coding-agent session without durable spec/ticket decomposition; spec when a durable implementation spec is useful but ticket decomposition is unnecessary; tickets only when decomposition/parallel or dependency-aware execution is genuinely useful. This marker is advisory for Anvil UI; do not force a route before the requirement is clear.`
-      : "";
-  return `You are executing an Anvil engineering activity. Follow the requested Matt Pocock skill as the source of engineering method. Do not invent a parallel Anvil methodology. Current activity: ${activity.type}.${route}`;
+  let activityProtocol = "";
+  if (activity.type === "alignment") {
+    activityProtocol =
+      ' End every response with exactly one single-line marker: ANVIL_DECISION: {"status":"needs_input|ready","route":"direct|spec|tickets|null","confidence":0.0,"reason":"brief reason","risk":"low|medium|high|critical","requiresApproval":false,"question":"next question or empty"}. Use needs_input while any implementation-significant question remains. Use ready only when work can start. Choose direct for clear single-session work, spec when a durable design is useful without decomposition, and tickets only when multiple dependent or independently verifiable slices make decomposition valuable. Set requiresApproval only for high-risk, irreversible, external, destructive, security-sensitive, or scope-expanding work.';
+  } else if (activity.type === "planning") {
+    activityProtocol =
+      " Anvil has already selected the tickets route. Produce a tracer-bullet breakdown and publish it immediately to the configured local tracker under .scratch/<feature-slug>/issues/, one Markdown file per ticket. Do not pause for a generic approval round. Stop only when a genuinely unresolved product, architecture, destructive, security, or external-system decision requires user input.";
+  }
+  return `You are executing an Anvil engineering activity. Follow the requested Matt Pocock skill as the source of engineering method. Do not invent a parallel Anvil methodology. Current activity: ${activity.type}.${activityProtocol}`;
 }
 function appendConversation(activity, role, text) {
   const clean = String(text || "").trim();
@@ -38,37 +45,6 @@ function appendConversation(activity, role, text) {
     text: clean,
     at: new Date().toISOString(),
   });
-}
-function extractRouteRecommendation(text) {
-  const hit = String(text || "").match(ROUTE_MARKER);
-  if (!hit) return { clean: String(text || "").trim(), recommendation: null };
-  try {
-    const value = JSON.parse(hit[1]);
-    if (!BUILD_ROUTES.has(value.route))
-      return {
-        clean: String(text || "")
-          .replace(hit[0], "")
-          .trim(),
-        recommendation: null,
-      };
-    return {
-      clean: String(text || "")
-        .replace(hit[0], "")
-        .trim(),
-      recommendation: {
-        route: value.route,
-        reason: String(value.reason || "").slice(0, 300),
-        at: new Date().toISOString(),
-      },
-    };
-  } catch {
-    return {
-      clean: String(text || "")
-        .replace(hit[0], "")
-        .trim(),
-      recommendation: null,
-    };
-  }
 }
 
 export function createActivityRunner({
@@ -192,8 +168,10 @@ export function createActivityRunner({
         });
         const parsed =
           activity.type === "alignment"
-            ? extractRouteRecommendation(out.text)
-            : { clean: out.text, recommendation: null };
+            ? parseAlignmentDecision(out.text)
+            : { clean: out.text, decision: null, error: null };
+        if (activity.type === "alignment" && parsed.error)
+          throw new Error(parsed.error);
         run.status = "completed";
         run.summary = parsed.clean.slice(0, 500);
         run.tools = out.tools.slice(0, 50);
@@ -202,10 +180,30 @@ export function createActivityRunner({
         session.status = "completed";
         if (activity.type === "alignment") {
           appendConversation(activity, "assistant", parsed.clean);
-          if (parsed.recommendation)
-            activity.routeRecommendation = parsed.recommendation;
-        }
-        if (activity.gate?.required) {
+          activity.alignmentDecision = parsed.decision;
+          activity.routeRecommendation = parsed.decision.route
+            ? {
+                route: parsed.decision.route,
+                reason: parsed.decision.reason,
+                at: parsed.decision.at,
+              }
+            : null;
+          if (parsed.decision.status === "needs_input") {
+            activity.gate = null;
+            activity.status = "waiting_user";
+            work.status = "waiting_user";
+          } else {
+            setBuildRoute(work, parsed.decision.route);
+            activity.gate = dynamicApprovalGate(parsed.decision);
+            if (activity.gate) {
+              activity.status = "waiting_user";
+              work.status = "waiting_user";
+            } else {
+              activity.status = "completed";
+              work.status = "active";
+            }
+          }
+        } else if (activity.gate?.required) {
           activity.status = "waiting_user";
           activity.gate.status = "waiting";
           work.status = "waiting_user";
