@@ -47,17 +47,23 @@ async function setup(t, title = "Adaptive BUILD") {
   };
 }
 
-async function approveAlignment(ctx, route) {
-  let activities = await ctx.store.listActivities(ctx.work.id);
-  const alignment = activities.find((a) => a.type === "alignment");
-  alignment.status = "waiting_user";
-  alignment.routeRecommendation = { route, reason: `test ${route}` };
+async function completeAlignment(ctx, route) {
+  const activities = await ctx.store.listActivities(ctx.work.id);
+  const alignment = activities.find((activity) => activity.type === "alignment");
+  alignment.status = "completed";
+  alignment.alignmentDecision = {
+    status: "ready",
+    route,
+    confidence: 1,
+    reason: `test ${route}`,
+    risk: "low",
+    requiresApproval: false,
+  };
   await ctx.store.saveActivity(alignment);
-  await ctx.orchestrator.decideHumanGate({
-    workId: ctx.work.id,
-    activityId: alignment.id,
-    decision: "approve",
-  });
+  const work = await ctx.store.getWork(ctx.work.id);
+  work.buildRoute = route;
+  work.status = "active";
+  await ctx.store.saveWork(work);
   return ctx.store.listActivities(ctx.work.id);
 }
 
@@ -83,7 +89,8 @@ test("Fake Agent drives alignment through the production Activity interface", as
     executeTurn: async () => {
       calls += 1;
       return {
-        text: '需求清楚。\nANVIL_ROUTE: {"route":"direct","reason":"test"}',
+        text:
+          '需求清楚。\nANVIL_DECISION: {"status":"ready","route":"direct","confidence":0.95,"reason":"test","risk":"low","requiresApproval":false,"question":""}',
         tools: [],
         files: [],
       };
@@ -100,8 +107,9 @@ test("Fake Agent drives alignment through the production Activity interface", as
   const storedWork = await context.store.getWork(context.work.id);
   const storedAlignment = await context.store.getActivity(alignment.id);
   assert.equal(calls, 1);
-  assert.equal(storedWork.status, "waiting_user");
-  assert.equal(storedAlignment.status, "waiting_user");
+  assert.equal(storedWork.status, "active");
+  assert.equal(storedWork.buildRoute, "direct");
+  assert.equal(storedAlignment.status, "completed");
   assert.equal(storedAlignment.routeRecommendation.route, "direct");
   assert.equal(storedAlignment.conversation.at(-1).text, "需求清楚。");
 });
@@ -115,7 +123,12 @@ test("concurrent advances share one Alignment execution", async (t) => {
       calls += 1;
       invocation = prompt;
       await new Promise((resolve) => setTimeout(resolve, 25));
-      return { text: "需要确认范围。", tools: [], files: [] };
+      return {
+        text:
+          '还需要确认影响范围。\nANVIL_DECISION: {"status":"needs_input","route":null,"confidence":0.7,"reason":"范围未明确","risk":"low","requiresApproval":false,"question":"需要覆盖哪些模块？"}',
+        tools: [],
+        files: [],
+      };
     },
     loadSkillBundle: async () => [],
   });
@@ -139,7 +152,7 @@ test("concurrent advances share one Alignment execution", async (t) => {
   );
 });
 
-test("Fake Agent completes the direct BUILD route in one Activity Session", async (t) => {
+test("Fake Agent completes the direct BUILD route without redundant approval", async (t) => {
   const context = await setup(t, "Direct route");
   let turns = 0;
   const runner = context.createActivityRunner({
@@ -148,7 +161,7 @@ test("Fake Agent completes the direct BUILD route in one Activity Session", asyn
       return {
         text:
           turns === 1
-            ? '已明确。\nANVIL_ROUTE: {"route":"direct","reason":"small"}'
+            ? '已明确，将直接实现。\nANVIL_DECISION: {"status":"ready","route":"direct","confidence":0.96,"reason":"small","risk":"low","requiresApproval":false,"question":""}'
             : "实现完成。",
         tools: [],
         files: [],
@@ -156,21 +169,8 @@ test("Fake Agent completes the direct BUILD route in one Activity Session", asyn
     },
     loadSkillBundle: async () => [],
   });
-  await context.orchestrator.advanceBuild({
-    workId: context.work.id,
-    project: context.project,
-    activityRunner: runner.runActivity,
-  });
-  const alignment = (await context.store.listActivities(context.work.id)).find(
-    (activity) => activity.type === "alignment",
-  );
-  const sessionId = alignment.sessionId;
-  await context.orchestrator.decideHumanGate({
-    workId: context.work.id,
-    activityId: alignment.id,
-    decision: "approve",
-  });
-  await context.orchestrator.advanceBuild({
+
+  const result = await context.orchestrator.advanceBuild({
     workId: context.work.id,
     project: context.project,
     activityRunner: runner.runActivity,
@@ -178,13 +178,17 @@ test("Fake Agent completes the direct BUILD route in one Activity Session", asyn
   });
 
   const completed = await context.store.getWork(context.work.id);
-  const storedAlignment = await context.store.getActivity(alignment.id);
+  const alignment = (await context.store.listActivities(context.work.id)).find(
+    (activity) => activity.type === "alignment",
+  );
+  assert.equal(result.reason, "completed");
   assert.equal(completed.status, "completed");
+  assert.equal(completed.buildRoute, "direct");
   assert.equal(turns, 2);
-  assert.equal(storedAlignment.sessionId, sessionId);
-});
+  assert.equal(alignment.gate, null);
+})
 
-test("Fake Agent completes the specification BUILD route without Tickets", async (t) => {
+test("Fake Agent auto-selects specification without creating Tickets", async (t) => {
   const context = await setup(t, "Specification route");
   let turns = 0;
   const runner = context.createActivityRunner({
@@ -193,7 +197,7 @@ test("Fake Agent completes the specification BUILD route without Tickets", async
       return {
         text:
           turns === 1
-            ? '已明确。\nANVIL_ROUTE: {"route":"spec","reason":"durable design"}'
+            ? '需求明确，先形成持久方案。\nANVIL_DECISION: {"status":"ready","route":"spec","confidence":0.9,"reason":"durable design","risk":"low","requiresApproval":false,"question":""}'
             : turns === 2
               ? "规格完成。"
               : "按规格实现完成。",
@@ -203,19 +207,7 @@ test("Fake Agent completes the specification BUILD route without Tickets", async
     },
     loadSkillBundle: async () => [],
   });
-  await context.orchestrator.advanceBuild({
-    workId: context.work.id,
-    project: context.project,
-    activityRunner: runner.runActivity,
-  });
-  const alignment = (await context.store.listActivities(context.work.id)).find(
-    (activity) => activity.type === "alignment",
-  );
-  await context.orchestrator.decideHumanGate({
-    workId: context.work.id,
-    activityId: alignment.id,
-    decision: "approve",
-  });
+
   await context.orchestrator.advanceBuild({
     workId: context.work.id,
     project: context.project,
@@ -223,11 +215,10 @@ test("Fake Agent completes the specification BUILD route without Tickets", async
     continueSession: runner.continueActivitySession,
   });
 
+  const work = await context.store.getWork(context.work.id);
   const activities = await context.store.listActivities(context.work.id);
-  assert.equal(
-    (await context.store.getWork(context.work.id)).status,
-    "completed",
-  );
+  assert.equal(work.status, "completed");
+  assert.equal(work.buildRoute, "spec");
   assert.equal(turns, 3);
   assert.equal(
     activities.find((activity) => activity.type === "planning").status,
@@ -237,36 +228,30 @@ test("Fake Agent completes the specification BUILD route without Tickets", async
     activities.some((activity) => activity.type === "implementation"),
     false,
   );
-});
+})
 
-test("Fake Agent completes dependency-ordered Ticket BUILD route", async (t) => {
+test("Fake Agent auto-selects and publishes dependency-ordered Tickets", async (t) => {
   const context = await setup(t, "Ticket route");
   let turns = 0;
   const runner = context.createActivityRunner({
     executeTurn: async ({ prompt }) => {
       turns += 1;
-      if (prompt.startsWith("ANVIL_PLANNING_APPROVED:")) {
+      if (prompt.startsWith("/to-tickets")) {
         const issues = path.join(context.worktree, ".scratch", "qa", "issues");
         await fs.mkdir(issues, { recursive: true });
         await fs.writeFile(
           path.join(issues, "01-base.md"),
-          "# 01: Base\\n\\n**Blocked by:** none\\n\\n- [ ] base works\\n".replaceAll(
-            "\\n",
-            "\n",
-          ),
+          "# 01: Base\n\n**Blocked by:** none\n\n- [ ] base works\n",
         );
         await fs.writeFile(
           path.join(issues, "02-next.md"),
-          "# 02: Next\\n\\n**Blocked by:** 01: Base\\n\\n- [ ] next works\\n".replaceAll(
-            "\\n",
-            "\n",
-          ),
+          "# 02: Next\n\n**Blocked by:** 01: Base\n\n- [ ] next works\n",
         );
       }
       return {
         text:
           turns === 1
-            ? '已明确。\nANVIL_ROUTE: {"route":"tickets","reason":"dependencies"}'
+            ? '需求需要依赖感知拆分。\nANVIL_DECISION: {"status":"ready","route":"tickets","confidence":0.91,"reason":"dependencies","risk":"low","requiresApproval":false,"question":""}'
             : "阶段完成。",
         tools: [],
         files: [],
@@ -274,45 +259,8 @@ test("Fake Agent completes dependency-ordered Ticket BUILD route", async (t) => 
     },
     loadSkillBundle: async () => [],
   });
-  await context.orchestrator.advanceBuild({
-    workId: context.work.id,
-    project: context.project,
-    activityRunner: runner.runActivity,
-  });
-  let activities = await context.store.listActivities(context.work.id);
-  const alignment = activities.find(
-    (activity) => activity.type === "alignment",
-  );
-  await context.orchestrator.decideHumanGate({
-    workId: context.work.id,
-    activityId: alignment.id,
-    decision: "approve",
-  });
-  const planningGate = await context.orchestrator.advanceBuild({
-    workId: context.work.id,
-    project: context.project,
-    activityRunner: runner.runActivity,
-  });
-  assert.equal(planningGate.reason, "gate");
-  assert.equal(
-    (
-      await context.getTicketFrontier({
-        work: await context.store.getWork(context.work.id),
-        project: context.project,
-      })
-    ).counts.total,
-    0,
-    "the initial planning turn must wait for approval before publishing tickets",
-  );
-  const planning = (await context.store.listActivities(context.work.id)).find(
-    (activity) => activity.type === "planning",
-  );
-  await context.orchestrator.decideHumanGate({
-    workId: context.work.id,
-    activityId: planning.id,
-    decision: "approve",
-  });
   const executedTickets = [];
+
   await context.orchestrator.advanceBuild({
     workId: context.work.id,
     project: context.project,
@@ -328,17 +276,16 @@ test("Fake Agent completes dependency-ordered Ticket BUILD route", async (t) => 
     },
   });
 
-  assert.equal(
-    (await context.store.getWork(context.work.id)).status,
-    "completed",
-  );
+  const work = await context.store.getWork(context.work.id);
+  assert.equal(work.status, "completed");
+  assert.equal(work.buildRoute, "tickets");
   assert.deepEqual(executedTickets, ["01", "02"]);
-  assert.equal(turns, 4);
-});
+  assert.equal(turns, 3);
+})
 
 test("adaptive BUILD chooses direct implementation after alignment", async (t) => {
   const ctx = await setup(t, "Tiny copy change");
-  const activities = await approveAlignment(ctx, "direct");
+  const activities = await completeAlignment(ctx, "direct");
   const work = await ctx.store.getWork(ctx.work.id);
   assert.equal(work.buildRoute, "direct");
   const next = ctx.orchestrator.decideNextBuildStep({ work, activities });
@@ -348,7 +295,7 @@ test("adaptive BUILD chooses direct implementation after alignment", async (t) =
 
 test("adaptive BUILD chooses spec implementation without tickets", async (t) => {
   const ctx = await setup(t, "Single feature with durable design");
-  let activities = await approveAlignment(ctx, "spec");
+  let activities = await completeAlignment(ctx, "spec");
   let work = await ctx.store.getWork(ctx.work.id);
   assert.equal(work.buildRoute, "spec");
   let next = ctx.orchestrator.decideNextBuildStep({ work, activities });
@@ -368,7 +315,7 @@ test("adaptive BUILD chooses spec implementation without tickets", async (t) => 
 
 test("adaptive BUILD keeps ticket frontier for decomposed work", async (t) => {
   const ctx = await setup(t, "Member upgrade");
-  let activities = await approveAlignment(ctx, "tickets");
+  let activities = await completeAlignment(ctx, "tickets");
   let work = await ctx.store.getWork(ctx.work.id);
   assert.equal(work.buildRoute, "tickets");
   let next = ctx.orchestrator.decideNextBuildStep({ work, activities });
