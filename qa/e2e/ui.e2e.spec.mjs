@@ -26,6 +26,7 @@ test("QA-UI-001 user can configure a project and create a BUILD", async ({
   await titleInput.press("Enter");
 
   await expect(page).toHaveURL(/\?work=WORK-/);
+  await expect(page.getByTitle("展开侧边栏")).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Browser-created BUILD" }),
   ).toBeVisible();
