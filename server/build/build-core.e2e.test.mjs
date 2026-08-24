@@ -403,6 +403,19 @@ test("adaptive BUILD keeps ticket frontier for decomposed work", async (t) => {
     decision: "approve",
   });
   activities = await ctx.store.listActivities(work.id);
+  next = ctx.orchestrator.decideNextBuildStep({
+    work: await ctx.store.getWork(work.id),
+    activities,
+  });
+  assert.equal(next.kind, "activity");
+  assert.equal(next.activity.type, "planning");
+  assert.equal(next.activity.gate.status, "approved");
+
+  // The continuation publishes the already approved local tickets before
+  // Planning is allowed to complete.
+  planning.status = "completed";
+  await ctx.store.saveActivity(planning);
+  activities = await ctx.store.listActivities(work.id);
   let frontier = await ctx.getTicketFrontier({
     work: await ctx.store.getWork(work.id),
     project: ctx.project,
