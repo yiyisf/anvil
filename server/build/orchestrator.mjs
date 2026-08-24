@@ -114,7 +114,13 @@ export async function decideHumanGate({
     );
   activity.gate.status =
     decision === "approve" ? "approved" : "revision_requested";
-  activity.status = decision === "approve" ? "completed" : "idle";
+  // Planning approval is input to the still-running /to-tickets workflow.
+  // Do not mark it completed until that same Agent Session has published
+  // the approved tickets to the configured tracker.
+  const resumesApprovedPlanning =
+    activity.type === "planning" && decision === "approve";
+  activity.status =
+    decision === "approve" && !resumesApprovedPlanning ? "completed" : "idle";
   work.status = decision === "approve" ? "active" : "waiting_user";
   await saveActivity(activity);
   await saveWork(work);
@@ -165,6 +171,11 @@ async function advanceBuildUnlocked({
     if (work.buildRoute === "tickets" && planning?.status === "completed") {
       await prepareImplementation({ work, project });
       frontier = await getTicketFrontier({ work, project });
+      if (frontier.counts.total === 0) {
+        throw new Error(
+          "方案已确认，但 /to-tickets 没有发布任何开发任务。请重试方案发布，并检查 docs/agents/issue-tracker.md 配置。",
+        );
+      }
     }
     const next = decideNextBuildStep({
       work,
@@ -202,6 +213,25 @@ async function advanceBuildUnlocked({
     }
     if (next.kind === "prepare_implementation") continue;
     if (next.kind === "activity") {
+      if (
+        next.activity.type === "planning" &&
+        next.activity.gate?.status === "approved"
+      ) {
+        await continueSession({
+          workId,
+          activityId: next.activity.id,
+          project,
+          phase: "spec",
+          prompt:
+            "ANVIL_PLANNING_APPROVED: The user approved the proposed ticket breakdown. Continue the existing /to-tickets workflow now. Publish the approved tickets to the configured local tracker under .scratch/<feature-slug>/issues/, one Markdown file per ticket. Do not ask for approval again.",
+          onEvent,
+        });
+        const completedPlanning = await getActivity(next.activity.id);
+        completedPlanning.status = "completed";
+        completedPlanning.finishedAt = new Date().toISOString();
+        await saveActivity(completedPlanning);
+        continue;
+      }
       await activityRunner({
         workId,
         activityId: next.activity.id,
