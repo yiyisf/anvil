@@ -49,6 +49,8 @@ BUILD ──────► Platform / Persistence / HTTP
 
 Requirement clarification is interactive. The Alignment Agent uses `grill-with-docs`, inspects the project and asks only questions that matter to implementation. Every turn ends with a structured `ANVIL_DECISION` outcome. `needs_input` keeps the natural-language conversation open; `ready` selects `direct`, `spec` or `tickets`. Low-risk ready decisions emit a `route_selected` event, making the selected route and reason visible before execution continues in the same stream. High-risk, irreversible, destructive, security-sensitive, external-system or scope-expanding decisions create a dynamic human Gate.
 
+Alignment is a read-only product phase and never performs implementation. For `direct` and `spec`, Anvil preserves the source Coding Agent session context but creates a separate `implementation` Activity, so progress, failure and completion remain observable as implementation state. `ANVIL_DECISION.question` and `decisionSummary` are concise structured summaries used by the UI decision history; raw assistant responses remain only in the conversation transcript.
+
 ```text
 /grill-with-docs
       │
