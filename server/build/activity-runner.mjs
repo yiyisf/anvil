@@ -93,6 +93,12 @@ export function createActivityRunner({
     await saveSkillRun(run);
     await saveActivity(activity);
     await saveWork(work);
+    onEvent?.({
+      type: "activity_state",
+      activityId: activity.id,
+      activityType: activity.type,
+      status: activity.status,
+    });
     try {
       const out = await executeTurn({
         reqId: work.id,
@@ -117,6 +123,12 @@ export function createActivityRunner({
       await saveSkillRun(run);
       await saveActivity(activity);
       await saveWork(work);
+      onEvent?.({
+        type: "activity_state",
+        activityId: activity.id,
+        activityType: activity.type,
+        status: activity.status,
+      });
       return { work, activity, run, output: out };
     } catch (error) {
       const finishedAt = new Date().toISOString();
