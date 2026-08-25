@@ -10,11 +10,21 @@ export function phaseState(type, data) {
   if (type === "completed")
     return data.work.status === "completed" ? "done" : "todo";
   if (type === "implementation") {
-    if (data.work.status === "completed") return "done";
-    return activities.find((activity) => activity.type === "planning")
-      ?.status === "completed"
-      ? "active"
-      : "todo";
+    const implementations = activities.filter(
+      (activity) => activity.type === "implementation",
+    );
+    if (
+      data.work.status === "completed" ||
+      implementations.some((activity) => activity.status === "completed")
+    )
+      return "done";
+    if (
+      implementations.some((activity) =>
+        ["running", "waiting_user", "recovering"].includes(activity.status),
+      )
+    )
+      return "active";
+    return "todo";
   }
   const activity = activities.find((candidate) => candidate.type === type);
   if (!activity) return "todo";
@@ -25,35 +35,23 @@ export function phaseState(type, data) {
 }
 
 export function requirementUnderstanding(activity, overview = "") {
-  const conversation = activity?.conversation || [];
-  const userMessages = [];
-  const decisions = [];
-  let latestAgentMessage = null;
-  let unansweredQuestion = null;
-
-  for (const message of conversation) {
-    const text = String(message.text || "").trim();
-    if (!text) continue;
-    if (message.role === "user") {
-      userMessages.push(text);
-      if (latestAgentMessage)
-        decisions.push({ question: latestAgentMessage, answer: text });
-      unansweredQuestion = null;
-    } else {
-      latestAgentMessage = text;
-      unansweredQuestion = text;
-    }
-  }
-
   const decision = activity?.alignmentDecision || null;
+  const decisions = (activity?.decisionLog || []).slice(-6).map((entry) => ({
+    question: String(entry.question || "").trim(),
+    answer: String(entry.outcome || "").trim(),
+  }));
+
   return {
-    overview: overview || userMessages[0] || "",
-    // Retained for callers that only need a compact list of confirmed inputs.
-    confirmed: userMessages.slice(-4),
-    decisions: decisions.slice(-6),
+    overview,
+    // Only structured summaries are projected here. Raw assistant messages may
+    // contain long explanations and must stay in the conversation transcript.
+    confirmed: decisions.map((entry) => entry.answer).filter(Boolean).slice(-4),
+    decisions: decisions.filter((entry) => entry.question && entry.answer),
     open:
-      activity?.status === "waiting_user" && unansweredQuestion
-        ? [unansweredQuestion]
+      activity?.status === "waiting_user" &&
+      decision?.status === "needs_input" &&
+      decision.question
+        ? [decision.question]
         : [],
     outcome:
       decision?.status === "ready"
