@@ -1,5 +1,7 @@
 # Anvil Architecture
 
+> 当前文档描述已实现的 Adaptive BUILD Alpha。已接受的 Conversation-native BUILD V6 将直接替换该协议；目标架构、事件协议和实施顺序见 `docs/plans/conversation-native-build-v6.md` 与 ADR 0003。在 V6 实现完成前，不应把下述 Alpha Marker/API 行为视为目标设计。
+
 ## Product intent
 
 Anvil productizes a proven engineering-skill workflow for people who should not need to understand or manually orchestrate individual coding-agent skills. The coding agent remains responsible for executing the upstream Matt Pocock skills; Anvil owns the product experience, lifecycle, safety boundaries, visibility, recovery and human interaction around that execution.
@@ -27,9 +29,29 @@ The upper layer therefore does **not** implement a skill marketplace or duplicat
 └──────────────────────────────────────────────────────────────┘
 ```
 
+## Source dependency direction
+
+BUILD 是唯一受支持的产品生命周期。项目不提供 v4 Requirement 的兼容或迁移能力；Project、Session、Agent、Sandbox 与 Worktree 作为共享模块保留。
+
+```text
+BUILD ──────► Platform / Persistence / HTTP
+```
+
+源码按该方向组织：
+
+- `server/build/`：BUILD 领域与用例；
+- `server/platform/`：Agent、Skill、Sandbox、Worktree；
+- `server/persistence/`：按领域分离的存储接口和共享 JSON 文件机制；
+- `server/http/`：HTTP/NDJSON 传输及路由注册；
+- `src/build/`、`src/shared/`：BUILD 界面与共享传输模块。
+
+外部 `/api/v5/*` 路径保持稳定；内部 BUILD 文件不再使用 `v5` 后缀。历史 `.data/reqs` 数据不再由应用读取，也不提供迁移流程。
+
 ## Adaptive BUILD flow
 
-Requirement clarification is interactive. The alignment agent uses `grill-with-docs`, inspects the project and asks only questions that matter to implementation. When the requirement is clear enough, the agent recommends an engineering shape. Anvil stores that recommendation and the user confirms the requirement before execution continues.
+Requirement clarification is interactive. The Alignment Agent uses `grill-with-docs`, inspects the project and asks only questions that matter to implementation. Every turn ends with a structured `ANVIL_DECISION` outcome. `needs_input` keeps the natural-language conversation open; `ready` selects `direct`, `spec` or `tickets`. Low-risk ready decisions emit a `route_selected` event, making the selected route and reason visible before execution continues in the same stream. High-risk, irreversible, destructive, security-sensitive, external-system or scope-expanding decisions create a dynamic human Gate.
+
+Alignment is a read-only product phase and never performs implementation. For `direct` and `spec`, Anvil preserves the source Coding Agent session context but creates a separate `implementation` Activity, so progress, failure and completion remain observable as implementation state. `ANVIL_DECISION.question` and `decisionSummary` are concise structured summaries used by the UI decision history; raw assistant responses remain only in the conversation transcript.
 
 ```text
 /grill-with-docs
@@ -47,7 +69,7 @@ The routes mean:
 - **spec** — the work benefits from a durable implementation specification, but decomposition into tickets would add ceremony without execution value.
 - **tickets** — decomposition is genuinely useful, for example because of multiple independent/dependent units of work or a larger execution surface.
 
-If the alignment agent does not provide a valid recommendation, Anvil currently falls back to the conservative `tickets` route rather than guessing that a complex task is small.
+A missing or invalid structured decision is a recoverable protocol error. It never defaults to `tickets`: protocol failure must not silently choose the most expensive execution route. The `tickets` route is valid only when the Agent explicitly identifies useful decomposition. Planning publishes local tickets automatically; it does not add a generic approval round.
 
 ## Session continuity
 
@@ -59,21 +81,23 @@ A route transition does not imply that Anvil must create a new conceptual method
 - **Activity** — a meaningful engineering interaction such as alignment, specification, planning or implementation. It may reference an upstream skill and an Agent Session.
 - **AgentSession** — coding-agent conversational/execution context.
 - **SkillRun** — one observable skill/session execution record.
-- **Gate** — explicit human decision point. Requirement approval is the key transition from clarification to execution.
+- **Gate** — an explicit human decision created only when risk or an unresolved consequential choice requires it. It is not a mandatory stage boundary.
 - **Ticket** — only required by the `tickets` route.
 
 ## Skill boundary
 
 Current BUILD mapping:
 
-| Product purpose | Upstream skill |
-| --- | --- |
-| clarify requirement | `grill-with-docs` |
-| create implementation specification | `to-spec` |
-| decompose larger work | `to-tickets` |
-| implementation engineering | `implement` (+ its configured dependencies) |
+| Product purpose                     | Upstream skill                              |
+| ----------------------------------- | ------------------------------------------- |
+| clarify requirement                 | `grill-with-docs`                           |
+| create implementation specification | `to-spec`                                   |
+| decompose larger work               | `to-tickets`                                |
+| implementation engineering          | `implement` (+ its configured dependencies) |
 
 Other upstream skills such as `prototype`, `wayfinder`, `handoff`, `research`, `diagnosing-bugs`, `codebase-design` and `domain-modeling` remain capabilities to introduce at appropriate product scenarios rather than mandatory global stages.
+
+The canonical domain language is recorded in `CONTEXT.md`.
 
 ## Safety and execution boundary
 
@@ -85,8 +109,8 @@ Implemented in the current alpha BUILD path:
 
 - interactive requirement clarification and reply API;
 - requirement-understanding UI projection;
-- agent-generated adaptive route recommendation;
-- human approval before route adoption;
+- structured Alignment decisions with explicit readiness, route, confidence and risk;
+- automatic low-risk route adoption and dynamic high-risk approval;
 - `direct`, `spec`, and `tickets` orchestration paths;
 - same-session direct implementation;
 - specification-context implementation without forced tickets;
