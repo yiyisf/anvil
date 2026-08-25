@@ -39,7 +39,17 @@ test("Alignment protocol selects a route without leaking its marker", () => {
   assert.equal(parsed.error, null);
   assert.equal(parsed.clean, "需求明确，可以直接开始。");
   assert.equal(parsed.decision.route, "direct");
+  assert.equal(parsed.decision.decisionSummary, "");
   assert.equal(dynamicApprovalGate(parsed.decision), null);
+});
+
+test("Alignment protocol keeps concise decision history fields", () => {
+  const parsed = parseAlignmentDecision(
+    '继续确认。\nANVIL_DECISION: {"status":"needs_input","route":null,"confidence":0.9,"reason":"边界待确认","risk":"low","requiresApproval":false,"question":"是否兼容旧接口？","decisionSummary":"目标用户仅为内部工程师"}',
+  );
+  assert.equal(parsed.error, null);
+  assert.equal(parsed.decision.question, "是否兼容旧接口？");
+  assert.equal(parsed.decision.decisionSummary, "目标用户仅为内部工程师");
 });
 
 test("high-risk Alignment decisions create a dynamic approval gate", () => {
