@@ -12,6 +12,7 @@ import {
 } from "./implementation.mjs";
 import { getTicketFrontier } from "./ticket-frontier.mjs";
 import { setBuildRoute } from "./domain.mjs";
+import { createSingleSessionImplementationActivity } from "./flow.mjs";
 
 const ROUTE_ORDER = Object.freeze({
   direct: ["alignment"],
@@ -127,24 +128,44 @@ export async function decideHumanGate({
 
 async function finishSingleSessionImplementation({
   work,
-  activity,
+  activity: sourceActivity,
   project,
   prompt,
+  route,
   onEvent,
   continueSession,
 }) {
-  await continueSession({
-    workId: work.id,
-    activityId: activity.id,
-    project,
-    phase: "impl",
-    prompt,
-    onEvent,
-  });
-  work.status = "completed";
-  work.currentActivityId = null;
-  await saveWork(work);
-  return { reason: "completed", work };
+  const activities = await listActivities(work.id);
+  let implementation = activities.find(
+    (candidate) =>
+      candidate.type === "implementation" &&
+      !candidate.ticketId &&
+      candidate.parentActivityId === sourceActivity.id,
+  );
+  if (!implementation) {
+    implementation = createSingleSessionImplementationActivity(
+      work.id,
+      sourceActivity,
+      route,
+    );
+    await saveActivity(implementation);
+  }
+  if (implementation.status !== "completed") {
+    await continueSession({
+      workId: work.id,
+      activityId: sourceActivity.id,
+      progressActivityId: implementation.id,
+      project,
+      phase: "impl",
+      prompt,
+      onEvent,
+    });
+  }
+  const latestWork = await getWork(work.id);
+  latestWork.status = "completed";
+  latestWork.currentActivityId = null;
+  await saveWork(latestWork);
+  return { reason: "completed", work: latestWork };
 }
 
 async function advanceBuildUnlocked({
@@ -197,6 +218,7 @@ async function advanceBuildUnlocked({
         project,
         prompt:
           "The requirement is confirmed and this is a small task that does not need a separate spec or ticket plan. Continue in this same session and implement the confirmed requirement now. Validate the change when finished.",
+        route: "direct",
         onEvent,
         continueSession,
       });
@@ -207,6 +229,7 @@ async function advanceBuildUnlocked({
         project,
         prompt:
           "The implementation specification is complete and ticket decomposition is intentionally unnecessary for this task. Continue from this specification context and implement the full confirmed change now. Follow the spec, use the implementation engineering practices available to you, and validate the change when finished.",
+        route: "spec",
         onEvent,
         continueSession,
       });
