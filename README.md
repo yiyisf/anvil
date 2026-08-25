@@ -4,7 +4,7 @@ Anvil 将经过验证的 AI 工程 Skills 产品化，让工程师和非专业�
 
 Anvil 不维护 Skill 市场，也不重新发明一套工程方法论。Coding Agent 直接使用 Matt Pocock Skills；Anvil 负责产品交互、状态编排、工作区隔离、恢复与工程可观测性。
 
-> 当前分支为 Adaptive BUILD Alpha。详细架构见 `ARCHITECTURE.md`，完整使用说明见 `USAGE.md`。
+> 当前分支仍运行 Adaptive BUILD Alpha；Conversation-native BUILD V6 已完成目标设计并将直接替换现有协议。详细设计见 `docs/plans/conversation-native-build-v6.md`，现行架构见 `ARCHITECTURE.md`，使用说明见 `USAGE.md`。
 
 ## 核心理念
 
