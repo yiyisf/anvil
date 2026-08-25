@@ -238,10 +238,15 @@ test("Fake Agent auto-selects specification without creating Tickets", async (t)
     activities.find((activity) => activity.type === "planning").status,
     "idle",
   );
-  assert.equal(
-    activities.some((activity) => activity.type === "implementation"),
-    false,
+  const specification = activities.find(
+    (activity) => activity.type === "specification",
   );
+  const implementation = activities.find(
+    (activity) => activity.type === "implementation" && !activity.ticketId,
+  );
+  assert.equal(implementation.status, "completed");
+  assert.equal(implementation.parentActivityId, specification.id);
+  assert.equal(implementation.sessionId, specification.sessionId);
 })
 
 test("Fake Agent auto-selects and publishes dependency-ordered Tickets", async (t) => {
