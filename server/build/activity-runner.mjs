@@ -29,7 +29,7 @@ function instructionsFor(activity) {
   let activityProtocol = "";
   if (activity.type === "alignment") {
     activityProtocol =
-      ' End every response with exactly one single-line marker: ANVIL_DECISION: {"status":"needs_input|ready","route":"direct|spec|tickets|null","confidence":0.0,"reason":"brief reason","risk":"low|medium|high|critical","requiresApproval":false,"question":"next question or empty"}. Use needs_input while any implementation-significant question remains. Use ready only when work can start. Choose direct for clear single-session work, spec when a durable design is useful without decomposition, and tickets only when multiple dependent or independently verifiable slices make decomposition valuable. Set requiresApproval only for high-risk, irreversible, external, destructive, security-sensitive, or scope-expanding work.';
+      ' This is requirement alignment only: inspect and discuss, but never modify project files or implement the request. End every response with exactly one single-line marker: ANVIL_DECISION: {"status":"needs_input|ready","route":"direct|spec|tickets|null","confidence":0.0,"reason":"brief reason","risk":"low|medium|high|critical","requiresApproval":false,"question":"concise standalone next question or empty","decisionSummary":"concise confirmed decision from the latest user answer or empty"}. Use needs_input while any implementation-significant question remains. Use ready only when work can start in a later implementation activity. Choose direct for clear work that can be implemented in one session, spec when a durable design is useful without decomposition, and tickets only when multiple dependent or independently verifiable slices make decomposition valuable. The question and decisionSummary fields are persisted as the decision history: summarize them in plain product language, never copy the full response or include hidden reasoning. Set requiresApproval only for high-risk, irreversible, external, destructive, security-sensitive, or scope-expanding work.';
   } else if (activity.type === "planning") {
     activityProtocol =
       " Anvil has already selected the tickets route. Produce a tracer-bullet breakdown and publish it immediately to the configured local tracker under .scratch/<feature-slug>/issues/, one Markdown file per ticket. Do not pause for a generic approval round. Stop only when a genuinely unresolved product, architecture, destructive, security, or external-system decision requires user input.";
@@ -54,6 +54,7 @@ export function createActivityRunner({
   async function continueActivitySession({
     workId,
     activityId,
+    progressActivityId = activityId,
     project,
     prompt,
     phase = null,
@@ -61,21 +62,32 @@ export function createActivityRunner({
   }) {
     const work = await getWork(workId);
     if (!work) throw new Error(`Work 不存在: ${workId}`);
-    const activity = await getActivity(activityId);
-    if (!activity || activity.workId !== workId)
+    const sessionActivity = await getActivity(activityId);
+    if (!sessionActivity || sessionActivity.workId !== workId)
       throw new Error(`Activity 不存在: ${activityId}`);
-    if (!activity.sessionId)
+    if (!sessionActivity.sessionId)
       throw new Error(`Activity ${activityId} 尚未建立 Agent Session`);
-    const skill = activity.technical?.skill;
+    const activity =
+      progressActivityId === activityId
+        ? sessionActivity
+        : await getActivity(progressActivityId);
+    if (!activity || activity.workId !== workId)
+      throw new Error(`执行 Activity 不存在: ${progressActivityId}`);
+
+    const skill =
+      activity.technical?.skill || sessionActivity.technical?.skill || null;
     const skills = skill ? await loadSkillBundle(skill) : [];
     const run = newSkillRun({
-      activityId,
-      sessionId: activity.sessionId,
+      activityId: activity.id,
+      sessionId: sessionActivity.sessionId,
       skill: skill || "session-continuation",
     });
+    const startedAt = new Date().toISOString();
     run.status = "running";
-    run.startedAt = new Date().toISOString();
+    run.startedAt = startedAt;
     activity.status = "running";
+    activity.sessionId = sessionActivity.sessionId;
+    activity.startedAt ||= startedAt;
     work.currentActivityId = activity.id;
     work.status = "active";
     await saveSkillRun(run);
@@ -85,28 +97,36 @@ export function createActivityRunner({
       const out = await executeTurn({
         reqId: work.id,
         worktreesDir: project.worktreesDir,
-        sessionKey: `activity-${activity.id}`,
+        // Reuse the source Activity key so the implementation receives the
+        // confirmed alignment/specification conversation.
+        sessionKey: `activity-${sessionActivity.id}`,
         phase: phase || ACTIVITY_PHASE[activity.type] || "impl",
-        instructions: `${instructionsFor(activity)} Continue the existing coding-agent session. Do not restart requirement discovery or create spec/tickets unless the task itself now requires them.`,
+        instructions: `${instructionsFor(activity)} Continue the existing coding-agent session. The earlier discovery is complete; execute only this activity's scope.`,
         skills,
         prompt,
         onEvent,
       });
+      const finishedAt = new Date().toISOString();
       run.status = "completed";
       run.summary = out.text.slice(0, 500);
       run.tools = out.tools.slice(0, 50);
       run.files = out.files;
-      run.finishedAt = new Date().toISOString();
-      activity.finishedAt = run.finishedAt;
+      run.finishedAt = finishedAt;
+      activity.status = "completed";
+      activity.finishedAt = finishedAt;
       await saveSkillRun(run);
       await saveActivity(activity);
       await saveWork(work);
       return { work, activity, run, output: out };
     } catch (error) {
+      const finishedAt = new Date().toISOString();
       run.status = "interrupted";
       run.summary = error.message;
-      run.finishedAt = new Date().toISOString();
+      run.finishedAt = finishedAt;
+      activity.status = "failed";
+      activity.finishedAt = finishedAt;
       await saveSkillRun(run);
+      await saveActivity(activity);
       throw error;
     }
   }
