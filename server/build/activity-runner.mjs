@@ -150,6 +150,10 @@ export function createActivityRunner({
       freshSession = false,
     } = {}) {
       const previousSessionId = activity.sessionId;
+      const previousQuestion =
+        activity.type === "alignment"
+          ? activity.alignmentDecision?.question || ""
+          : "";
       const session = newAgentSession({
         workId,
         activityId,
@@ -200,6 +204,15 @@ export function createActivityRunner({
         session.status = "completed";
         if (activity.type === "alignment") {
           appendConversation(activity, "assistant", parsed.clean);
+          if (previousQuestion && parsed.decision.decisionSummary) {
+            activity.decisionLog ||= [];
+            activity.decisionLog.push({
+              question: previousQuestion,
+              outcome: parsed.decision.decisionSummary,
+              at: parsed.decision.at,
+            });
+            activity.decisionLog = activity.decisionLog.slice(-12);
+          }
           activity.alignmentDecision = parsed.decision;
           activity.routeRecommendation = parsed.decision.route
             ? {
