@@ -33,7 +33,8 @@ export function parseAlignmentDecision(text) {
       risk,
       requiresApproval:
         Boolean(value.requiresApproval) || risk === "high" || risk === "critical",
-      question: String(value.question || "").slice(0, 1000),
+      question: String(value.question || "").slice(0, 300),
+      decisionSummary: String(value.decisionSummary || "").slice(0, 300),
       at: new Date().toISOString(),
     };
 
