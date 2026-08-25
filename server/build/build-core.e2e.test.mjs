@@ -180,8 +180,12 @@ test("Fake Agent completes the direct BUILD route without redundant approval", a
   });
 
   const completed = await context.store.getWork(context.work.id);
-  const alignment = (await context.store.listActivities(context.work.id)).find(
+  const activities = await context.store.listActivities(context.work.id);
+  const alignment = activities.find(
     (activity) => activity.type === "alignment",
+  );
+  const implementation = activities.find(
+    (activity) => activity.type === "implementation" && !activity.ticketId,
   );
   assert.equal(result.reason, "completed");
   assert.equal(completed.status, "completed");
@@ -191,7 +195,11 @@ test("Fake Agent completes the direct BUILD route without redundant approval", a
     ["direct"],
   );
   assert.equal(turns, 2);
+  assert.equal(alignment.status, "completed");
   assert.equal(alignment.gate, null);
+  assert.equal(implementation.status, "completed");
+  assert.equal(implementation.parentActivityId, alignment.id);
+  assert.equal(implementation.sessionId, alignment.sessionId);
 })
 
 test("Fake Agent auto-selects specification without creating Tickets", async (t) => {
