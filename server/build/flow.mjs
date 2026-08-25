@@ -35,6 +35,20 @@ export function createImplementationActivity(workId, ticket) {
   });
 }
 
+export function createSingleSessionImplementationActivity(
+  workId,
+  sourceActivity,
+  route,
+) {
+  return newActivity({
+    workId,
+    type: "implementation",
+    label: route === "direct" ? "直接开发" : "按方案开发",
+    skill: BUILD_SKILLS.implementation,
+    parentActivityId: sourceActivity.id,
+  });
+}
+
 export function isGateWaiting(activity) {
   return activity?.gate?.required && activity.gate.status === "waiting";
 }
