@@ -416,6 +416,10 @@ export default function WorkView({ workId, apiBase = "" }) {
       await api.stream(url.replace(apiBase, ""), body, (e) => {
         if (e.type === "text") setLive((s) => s + e.text);
         if (e.type === "orchestrator") setStage(e.state);
+        if (e.type === "activity_state") {
+          setStage(`${e.activityType}:${e.status}`);
+          refresh().catch((error) => setError(error.message));
+        }
         if (e.type === "route_selected")
           setRouteDecision({
             route: e.route,
@@ -614,9 +618,20 @@ export default function WorkView({ workId, apiBase = "" }) {
         </div>
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600">
-          {busy
-            ? `AI 正在继续处理${stage ? ` · ${stage}` : ""}…`
-            : "当前无需你操作。BUILD 会自动推进到下一个需要确认的位置。"}
+          {busy ? (
+            <>
+              <div>
+                AI 正在继续处理{stage ? ` · ${stage}` : ""}…
+              </div>
+              {live && (
+                <div className="mt-3 whitespace-pre-wrap border-t border-slate-100 pt-3 leading-6 text-slate-700">
+                  {live}
+                </div>
+              )}
+            </>
+          ) : (
+            "当前无需你操作。BUILD 会自动推进到下一个需要确认的位置。"
+          )}
         </div>
       )}
       <div className="rounded-xl border border-slate-200 bg-white p-4">
