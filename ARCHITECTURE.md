@@ -1,5 +1,7 @@
 # Anvil Architecture
 
+> 当前文档描述已实现的 Adaptive BUILD Alpha。已接受的 Conversation-native BUILD V6 将直接替换该协议；目标架构、事件协议和实施顺序见 `docs/plans/conversation-native-build-v6.md` 与 ADR 0003。在 V6 实现完成前，不应把下述 Alpha Marker/API 行为视为目标设计。
+
 ## Product intent
 
 Anvil productizes a proven engineering-skill workflow for people who should not need to understand or manually orchestrate individual coding-agent skills. The coding agent remains responsible for executing the upstream Matt Pocock skills; Anvil owns the product experience, lifecycle, safety boundaries, visibility, recovery and human interaction around that execution.
